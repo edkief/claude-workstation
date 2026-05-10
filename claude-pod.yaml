@@ -1,0 +1,142 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: claude-workspace-pvc
+  namespace: dev
+spec:
+  storageClassName: truenas-iscsi-ssd
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claude-workstation
+  namespace: dev
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: claude-workstation
+  template:
+    metadata:
+      labels:
+        app: claude-workstation
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+      containers:
+      - name: workstation
+        image: registry.kieffer.me/claude-workstation:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 7681
+          name: tty-port
+        - containerPort: 3000
+          name: api-port
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+        volumeMounts:
+        - name: workspace-data
+          mountPath: /home/ubuntu/workspace
+        - name: workspace-data
+          mountPath: /home/ubuntu/.claude
+          subPath: .claude-config
+        - name: workspace-data
+          mountPath: /home/ubuntu/.claude.json
+          subPath: .claude.json
+        - name: workspace-data
+          mountPath: /home/ubuntu/.claude-sessions
+          subPath: .claude-sessions
+        - name: github-ssh
+          mountPath: /run/secrets/github-ssh
+          readOnly: true
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: github-ssh-key
+              key: github_token
+      volumes:
+      - name: workspace-data
+        persistentVolumeClaim:
+          claimName: claude-workspace-pvc
+      - name: github-ssh
+        secret:
+          secretName: github-ssh-key
+          defaultMode: 0400
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: claude-svc
+  namespace: dev
+spec:
+  selector:
+    app: claude-workstation
+  ports:
+  - name: ttyd
+    protocol: TCP
+    port: 7681
+    targetPort: 7681
+  - name: api
+    protocol: TCP
+    port: 3000
+    targetPort: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: claude-workstation
+  namespace: dev
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-production"
+    traefik.ingress.kubernetes.io/router.middlewares: authz-proxy-authz-reverse-proxy@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - claude-workstation.kieffer.me
+      secretName: claude-workstation-tls
+  rules:
+    - host: claude-workstation.kieffer.me
+      http:
+        paths:
+          - pathType: Prefix
+            path: /api
+            backend:
+              service:
+                name: claude-svc
+                port:
+                  name: api
+          - pathType: Prefix
+            path: /sessions
+            backend:
+              service:
+                name: claude-svc
+                port:
+                  name: api
+          - pathType: Prefix
+            path: /
+            backend:
+              service:
+                name: claude-svc
+                port:
+                  name: ttyd

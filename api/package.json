@@ -1,0 +1,9 @@
+{
+  "name": "claude-session-api",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "main": "server.js",
+  "dependencies": {
+    "express": "^4.19.0"
+  }
+}

@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Workstation</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: ui-monospace, monospace; background: #0d1117; color: #e6edf3; min-height: 100vh; padding: 2rem; }
+  h1 { font-size: 1.4rem; color: #58a6ff; margin-bottom: 2rem; }
+  h2 { font-size: 1rem; color: #8b949e; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 1rem; }
+  section { margin-bottom: 2.5rem; }
+
+  table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+  th { text-align: left; color: #8b949e; font-weight: 500; padding: .5rem .75rem; border-bottom: 1px solid #21262d; }
+  td { padding: .5rem .75rem; border-bottom: 1px solid #21262d; vertical-align: middle; word-break: break-all; }
+  tr:last-child td { border-bottom: none; }
+  .status-running { color: #3fb950; }
+  .status-dead    { color: #f85149; }
+
+  form { display: grid; gap: .75rem; max-width: 520px; }
+  label { font-size: .875rem; color: #8b949e; display: flex; flex-direction: column; gap: .3rem; }
+  input[type=text], select {
+    background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+    color: #e6edf3; padding: .45rem .65rem; font-family: inherit; font-size: .875rem;
+  }
+  input[type=text]:focus, select:focus { outline: none; border-color: #58a6ff; }
+  select option { background: #161b22; }
+  .checkbox-row { flex-direction: row; align-items: center; gap: .5rem; cursor: pointer; }
+  input[type=checkbox] { accent-color: #58a6ff; width: 15px; height: 15px; }
+  .mode-toggle { font-size: .8rem; color: #58a6ff; cursor: pointer; text-decoration: underline; background: none; border: none; padding: 0; font-family: inherit; }
+
+  button { font-family: inherit; font-size: .875rem; border: none; border-radius: 6px; padding: .45rem .9rem; cursor: pointer; }
+  .btn-primary  { background: #238636; color: #fff; }
+  .btn-primary:hover  { background: #2ea043; }
+  .btn-danger   { background: #21262d; color: #f85149; border: 1px solid #f8514960; }
+  .btn-danger:hover   { background: #f851491a; }
+  .btn-terminal { background: #21262d; color: #58a6ff; border: 1px solid #30363d; }
+  .btn-terminal:hover { background: #30363d; }
+
+  .empty  { color: #8b949e; font-size: .875rem; padding: .75rem 0; }
+  #msg-error   { color: #f85149; font-size: .875rem; min-height: 1.2rem; }
+  #msg-success { color: #3fb950; font-size: .875rem; min-height: 1.2rem; }
+  .repo-hint { font-size: .75rem; color: #8b949e; margin-top: .2rem; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner { display: inline-block; width: 11px; height: 11px; border: 2px solid #ffffff60;
+             border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite;
+             vertical-align: middle; margin-right: .4rem; }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+</style>
+</head>
+<body>
+<h1>Claude Workstation <span id="pod-name" style="font-size:.85rem;color:#8b949e;font-weight:400"></span></h1>
+
+<section>
+  <h2>Active Sessions</h2>
+  <div id="sessions-container"><p class="empty">Loading…</p></div>
+</section>
+
+<section>
+  <h2>Start New Session</h2>
+  <form id="start-form">
+
+    <!-- Repo selector: dropdown or manual -->
+    <label id="label-dropdown">
+      <span>Repository <button type="button" class="mode-toggle" id="toggle-mode">(enter URL manually)</button></span>
+      <select id="repo-select" name="repo-select">
+        <option value="">Loading repositories…</option>
+      </select>
+      <span class="repo-hint" id="repo-hint"></span>
+    </label>
+
+    <label id="label-manual" style="display:none">
+      <span>Git URL <button type="button" class="mode-toggle" id="toggle-mode-back">(pick from list)</button></span>
+      <input type="text" name="project-manual" id="project-manual" placeholder="git@github.com:user/repo.git">
+    </label>
+
+    <label id="label-branch-select">
+      <span>Branch <button type="button" class="mode-toggle" id="toggle-branch-mode">(enter manually)</button></span>
+      <select id="branch-select">
+        <option value="">— select a repo first —</option>
+      </select>
+    </label>
+    <label id="label-branch-manual" style="display:none">
+      <span>Branch <button type="button" class="mode-toggle" id="toggle-branch-mode-back">(pick from list)</button></span>
+      <input type="text" id="branch-manual" placeholder="main">
+    </label>
+
+    <label>
+      <span>New branch <span style="color:#8b949e;font-weight:400">(optional — create and checkout after clone)</span></span>
+      <input type="text" id="new-branch" placeholder="feature/my-work">
+    </label>
+
+    <label class="checkbox-row">
+      <input type="checkbox" name="force">
+      Force-reset if workspace already exists for this project+branch
+    </label>
+
+    <div>
+      <button type="submit" class="btn-primary">Start Session</button>
+    </div>
+    <div id="msg-error"></div>
+    <div id="msg-success"></div>
+  </form>
+</section>
+
+<script>
+const TERMINAL_URL = '/';
+let manualMode = false;
+let branchManualMode = false;
+let reposCache = [];
+
+// --- Repo dropdown ---
+async function loadRepos() {
+  try {
+    const res = await fetch('/api/repos');
+    if (!res.ok) throw new Error();
+    reposCache = await res.json();
+    const sel = document.getElementById('repo-select');
+    sel.innerHTML = '<option value="">— select a repository —</option>'
+      + reposCache.map(r =>
+          `<option value="${escHtml(r.sshUrl)}" data-branch="${escHtml(r.defaultBranch)}" data-fullname="${escHtml(r.fullName)}">`
+          + `${escHtml(r.fullName)}${r.private ? ' 🔒' : ''}`
+          + `</option>`
+        ).join('');
+    document.getElementById('repo-hint').textContent = `${reposCache.length} repos loaded`;
+  } catch {
+    document.getElementById('repo-select').innerHTML = '<option value="">Failed to load — use manual mode</option>';
+    document.getElementById('repo-hint').textContent = '';
+  }
+}
+
+document.getElementById('repo-select').addEventListener('change', async function () {
+  const opt = this.options[this.selectedIndex];
+  const fullName = opt.dataset.fullname;
+  const defaultBranch = opt.dataset.branch;
+  const sel = document.getElementById('branch-select');
+
+  if (!fullName) {
+    sel.innerHTML = '<option value="">— select a repo first —</option>';
+    return;
+  }
+
+  sel.innerHTML = '<option value="">Loading branches…</option>';
+  sel.disabled = true;
+
+  try {
+    const res = await fetch(`/api/branches?repo=${encodeURIComponent(fullName)}`);
+    if (!res.ok) throw new Error();
+    const branches = await res.json();
+    sel.innerHTML = branches.map(b =>
+      `<option value="${escHtml(b)}"${b === defaultBranch ? ' selected' : ''}>${escHtml(b)}</option>`
+    ).join('');
+    // Also sync manual input
+    document.getElementById('branch-manual').value = defaultBranch || '';
+  } catch {
+    sel.innerHTML = '<option value="">Failed to load branches</option>';
+    // Fall back to manual with default branch pre-filled
+    document.getElementById('branch-manual').value = defaultBranch || '';
+    setBranchManualMode(true);
+  } finally {
+    sel.disabled = false;
+  }
+});
+
+function setBranchManualMode(manual) {
+  branchManualMode = manual;
+  document.getElementById('label-branch-select').style.display = manual ? 'none' : '';
+  document.getElementById('label-branch-manual').style.display = manual ? '' : 'none';
+}
+document.getElementById('toggle-branch-mode').addEventListener('click', () => setBranchManualMode(true));
+document.getElementById('toggle-branch-mode-back').addEventListener('click', () => setBranchManualMode(false));
+
+// --- Mode toggle ---
+function setManualMode(manual) {
+  manualMode = manual;
+  document.getElementById('label-dropdown').style.display = manual ? 'none' : '';
+  document.getElementById('label-manual').style.display = manual ? '' : 'none';
+}
+document.getElementById('toggle-mode').addEventListener('click', () => setManualMode(true));
+document.getElementById('toggle-mode-back').addEventListener('click', () => setManualMode(false));
+
+// --- Sessions ---
+async function loadSessions() {
+  try {
+    const res = await fetch('/api/sessions');
+    const sessions = await res.json();
+    renderSessions(sessions);
+  } catch {
+    document.getElementById('sessions-container').innerHTML = '<p class="empty">Failed to load sessions.</p>';
+  }
+}
+
+function renderSessions(sessions) {
+  const container = document.getElementById('sessions-container');
+  if (!sessions.length) {
+    container.innerHTML = '<p class="empty">No active sessions.</p>';
+    return;
+  }
+  const rows = sessions.map(s => {
+    const statusClass = s.status === 'running' ? 'status-running' : 'status-dead';
+    const started = new Date(s.startedAt).toLocaleString();
+    const repoLabel = s.project.replace(/^.*[:/]/, '').replace(/\.git$/, '');
+    return `<tr>
+      <td title="${escHtml(s.name)}">${escHtml(s.name)}</td>
+      <td>${escHtml(repoLabel)}</td>
+      <td>${escHtml(s.branch)}</td>
+      <td>${started}</td>
+      <td class="${statusClass}">${s.status}</td>
+      <td style="white-space:nowrap">
+        <button class="btn-terminal" onclick="openTerminal()">Terminal</button>
+        <button class="btn-danger" onclick="terminateSession('${escHtml(s.name)}')">Terminate</button>
+      </td>
+    </tr>`;
+  }).join('');
+  container.innerHTML = `<table>
+    <thead><tr>
+      <th>Session name</th><th>Repo</th><th>Branch</th><th>Started</th><th>Status</th><th>Actions</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+function openTerminal() {
+  window.open(TERMINAL_URL, '_blank');
+}
+
+async function terminateSession(name) {
+  if (!confirm(`Terminate session "${name}"?`)) return;
+  try {
+    await fetch(`/api/sessions/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    loadSessions();
+  } catch {
+    alert('Failed to terminate session.');
+  }
+}
+
+// --- Form submit ---
+document.getElementById('start-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const errEl = document.getElementById('msg-error');
+  const okEl  = document.getElementById('msg-success');
+  errEl.textContent = '';
+  okEl.textContent  = '';
+
+  const project = manualMode
+    ? document.getElementById('project-manual').value.trim()
+    : document.getElementById('repo-select').value;
+
+  if (!project) {
+    errEl.textContent = manualMode ? 'Please enter a Git URL.' : 'Please select a repository.';
+    return;
+  }
+
+  const branch = branchManualMode
+    ? document.getElementById('branch-manual').value.trim()
+    : document.getElementById('branch-select').value.trim();
+
+  if (!branch) { errEl.textContent = 'Branch is required.'; return; }
+
+  const newBranch = document.getElementById('new-branch').value.trim();
+  const body = { project, branch, force: form.force.checked, ...(newBranch && { newBranch }) };
+
+  const submitBtn = form.querySelector('button[type=submit]');
+  submitBtn.disabled = true;
+  submitBtn.innerHTML = '<span class="spinner"></span>Starting…';
+
+  try {
+    const res = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const data = await res.json();
+      errEl.textContent = data.error + (data.detail ? ': ' + data.detail : '');
+      return;
+    }
+    const session = await res.json();
+    okEl.textContent = `Session "${session.name}" started.`;
+    form.reset();
+    document.getElementById('branch-select').innerHTML = '<option value="">— select a repo first —</option>';
+    document.getElementById('branch-manual').value = '';
+    document.getElementById('new-branch').value = '';
+    loadSessions();
+  } catch {
+    errEl.textContent = 'Request failed.';
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.innerHTML = 'Start Session';
+  }
+});
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+fetch('/api/info').then(r => r.json()).then(d => {
+  if (d.podName) document.getElementById('pod-name').textContent = d.podName;
+}).catch(() => {});
+
+loadRepos();
+loadSessions();
+setInterval(loadSessions, 10000);
+</script>
+</body>
+</html>
