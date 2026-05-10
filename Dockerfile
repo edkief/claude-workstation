@@ -46,6 +46,11 @@ COPY --chown=ubuntu:ubuntu api/ ./
 RUN mkdir -p /home/ubuntu/workspace /home/ubuntu/.claude-sessions \
     && echo '[]' > /home/ubuntu/.claude-sessions/state.json
 
+# Pre-configure byobu to use tmux-style keybindings (ctrl+b) so the first-run
+# "screen or tmux?" prompt never appears on pod restart.
+RUN mkdir -p /home/ubuntu/.byobu \
+    && ln -sf /usr/share/byobu/keybindings/tmux /home/ubuntu/.byobu/keybindings
+
 # On login, attach to the byobu session named in ~/.claude-session if written within the last 10s
 RUN printf '%s\n' \
     'if [ -f "$HOME/.claude-session" ]; then' \

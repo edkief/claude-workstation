@@ -47,13 +47,28 @@
              border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite;
              vertical-align: middle; margin-right: .4rem; }
   button:disabled { opacity: .55; cursor: not-allowed; }
+  .quick-link {
+    font-size: .8rem; color: #8b949e; text-decoration: none;
+    border: 1px solid #30363d; border-radius: 6px; padding: .3rem .65rem;
+    background: #161b22;
+  }
+  .quick-link:hover { color: #e6edf3; border-color: #8b949e; }
 </style>
 </head>
 <body>
-<h1>Claude Workstation <span id="pod-name" style="font-size:.85rem;color:#8b949e;font-weight:400"></span></h1>
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2rem">
+  <h1 style="margin-bottom:0">Claude Workstation <span id="pod-name" style="font-size:.85rem;color:#8b949e;font-weight:400"></span></h1>
+  <div style="display:flex;gap:.6rem;align-items:center">
+    <a href="/" target="_blank" class="quick-link">Terminal</a>
+    <a href="https://claude.ai/code" target="_blank" class="quick-link">claude.ai/code</a>
+  </div>
+</div>
 
 <section>
-  <h2>Active Sessions</h2>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+    <h2 style="margin-bottom:0">Active Sessions</h2>
+    <button class="btn-danger" id="remove-inactive-btn" onclick="removeInactiveSessions()" style="font-size:.8rem;padding:.3rem .7rem">Remove inactive</button>
+  </div>
   <div id="sessions-container"><p class="empty">Loading…</p></div>
 </section>
 
@@ -233,6 +248,27 @@ async function terminateSession(name) {
     loadSessions();
   } catch {
     alert('Failed to terminate session.');
+  }
+}
+
+async function removeInactiveSessions() {
+  const btn = document.getElementById('remove-inactive-btn');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/sessions');
+    if (!res.ok) throw new Error();
+    const sessions = await res.json();
+    const inactive = sessions.filter(s => s.status !== 'running');
+    if (!inactive.length) { alert('No inactive sessions to remove.'); return; }
+    if (!confirm(`Remove ${inactive.length} inactive session(s)?`)) return;
+    await Promise.all(inactive.map(s =>
+      fetch(`/api/sessions/${encodeURIComponent(s.name)}`, { method: 'DELETE' })
+    ));
+    loadSessions();
+  } catch {
+    alert('Failed to remove inactive sessions.');
+  } finally {
+    btn.disabled = false;
   }
 }
 
