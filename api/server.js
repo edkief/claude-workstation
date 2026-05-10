@@ -37,7 +37,7 @@ function repoNameFromUrl(url) {
 }
 
 function timestamp() {
-    return new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
+    return new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
 }
 
 // GET /api/info — static workstation metadata
@@ -221,6 +221,16 @@ app.post('/api/sessions', (req, res) => {
     sessions.push(entry);
     writeState(sessions);
     res.status(201).json(entry);
+});
+
+// POST /api/sessions/:name/activate — write ~/.claude-session so the next bash login attaches to it
+app.post('/api/sessions/:name/activate', (req, res) => {
+    const sessions = readState();
+    const entry = sessions.find(s => s.name === req.params.name);
+    if (!entry) return res.status(404).json({ error: 'session not found' });
+    const payload = JSON.stringify({ byobuSession: entry.byobuSession, ts: Date.now() });
+    fs.writeFileSync('/home/ubuntu/.claude-session', payload, 'utf8');
+    res.status(204).end();
 });
 
 // DELETE /api/sessions/:name — terminate a session

@@ -46,6 +46,20 @@ COPY --chown=ubuntu:ubuntu api/ ./
 RUN mkdir -p /home/ubuntu/workspace /home/ubuntu/.claude-sessions \
     && echo '[]' > /home/ubuntu/.claude-sessions/state.json
 
+# On login, attach to the byobu session named in ~/.claude-session if written within the last 10s
+RUN printf '%s\n' \
+    'if [ -f "$HOME/.claude-session" ]; then' \
+    '  _age=$(( $(date +%s) - $(date -r "$HOME/.claude-session" +%s) ))' \
+    '  if [ "$_age" -le 10 ]; then' \
+    '    _target=$(node -e "process.stdout.write(JSON.parse(require(\"fs\").readFileSync(process.env.HOME+\"/.claude-session\",\"utf8\")).byobuSession)")' \
+    '    rm -f "$HOME/.claude-session"' \
+    '    exec byobu attach-session -t "$_target"' \
+    '  fi' \
+    '  rm -f "$HOME/.claude-session"' \
+    'fi' \
+    'exec byobu' \
+    >> /home/ubuntu/.bash_profile
+
 USER root
 COPY supervisord.conf /etc/supervisor/conf.d/workstation.conf
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

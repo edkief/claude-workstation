@@ -208,7 +208,7 @@ function renderSessions(sessions) {
       <td>${started}</td>
       <td class="${statusClass}">${s.status}</td>
       <td style="white-space:nowrap">
-        <button class="btn-terminal" onclick="openTerminal()">Terminal</button>
+        <button class="btn-terminal" onclick="openTerminal('${escHtml(s.name)}')">Terminal</button>
         <button class="btn-danger" onclick="terminateSession('${escHtml(s.name)}')">Terminate</button>
       </td>
     </tr>`;
@@ -221,7 +221,8 @@ function renderSessions(sessions) {
   </table>`;
 }
 
-function openTerminal() {
+async function openTerminal(name) {
+  await fetch(`/api/sessions/${encodeURIComponent(name)}/activate`, { method: 'POST' });
   window.open(TERMINAL_URL, '_blank');
 }
 
