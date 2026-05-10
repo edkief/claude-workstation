@@ -49,7 +49,7 @@ RUN mkdir -p /home/ubuntu/workspace /home/ubuntu/.claude-sessions \
 # Pre-configure byobu to use tmux-style keybindings (ctrl+b) so the first-run
 # "screen or tmux?" prompt never appears on pod restart.
 RUN mkdir -p /home/ubuntu/.byobu \
-    && ln -sf /usr/share/byobu/keybindings/tmux /home/ubuntu/.byobu/keybindings
+    && ln -sf /usr/share/byobu/keybindings/tmux-screen-keys.conf
 
 RUN git config --global user.name "Edouard Kieffer" \
     && git config --global user.email "edkief@users.noreply.github.com"
