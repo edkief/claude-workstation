@@ -183,7 +183,7 @@ app.post('/api/sessions', (req, res) => {
         return res.status(500).json({ error: 'failed to start byobu session', detail: err.message });
     }
 
-    // Poll the pane output until claude prints "Connected" (confirms successful startup).
+    // Poll the pane output until claude prints "Connected" and "Ready" (confirms successful startup).
     // Bail out after 30s and surface whatever the pane showed as an error.
     const TIMEOUT_MS = 30000;
     const POLL_MS = 500;
@@ -193,7 +193,7 @@ app.post('/api/sessions', (req, res) => {
     while (Date.now() < deadline) {
         const result = spawnSync('tmux', ['capture-pane', '-t', byobuSession, '-p'], { stdio: 'pipe' });
         lastPane = result.stdout ? result.stdout.toString() : '';
-        if (lastPane.includes('Connected') && lastPane.includes(sessionName)) {
+        if ((lastPane.includes('Connected') || lastPane.includes('Ready')) && lastPane.includes(sessionName)) {
             connected = true;
             break;
         }
