@@ -51,6 +51,9 @@ RUN mkdir -p /home/ubuntu/workspace /home/ubuntu/.claude-sessions \
 RUN mkdir -p /home/ubuntu/.byobu \
     && ln -sf /usr/share/byobu/keybindings/tmux /home/ubuntu/.byobu/keybindings
 
+RUN git config --global user.name "Edouard Kieffer" \
+    && git config --global user.email "edkief@users.noreply.github.com"
+
 # On login, attach to the byobu session named in ~/.claude-session if written within the last 10s
 RUN printf '%s\n' \
     'if [ -f "$HOME/.claude-session" ]; then' \
