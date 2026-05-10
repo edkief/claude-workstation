@@ -57,7 +57,6 @@ RUN printf '%s\n' \
     '  fi' \
     '  rm -f "$HOME/.claude-session"' \
     'fi' \
-    'exec byobu' \
     >> /home/ubuntu/.bash_profile
 
 USER root
