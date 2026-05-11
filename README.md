@@ -1,6 +1,6 @@
 # claude-workstation
 
-A Kubernetes-deployed container that provides a browser-accessible Claude Code development environment. It combines a web terminal ([ttyd](https://github.com/tsl0922/ttyd)) with a small Express API that manages Claude Code remote sessions inside byobu/tmux.
+A Kubernetes-deployed container that provides a browser-accessible Claude Code development environment plugged directly into Claude remote connect. It combines a web terminal ([ttyd](https://github.com/tsl0922/ttyd)) with a small Express API that manages Claude Code remote sessions inside byobu/tmux.
 
 ## How it works
 
@@ -11,7 +11,7 @@ Browser
   └── /sessions/*    → Express API (port 3000) — session management
 ```
 
-Both services are managed by supervisord and started by `entrypoint.sh`. The web UI (served by the API) lets you browse your GitHub repos, pick a branch, and launch a Claude Code session — all from your browser. Once a session is running you hit **Terminal** and land inside that session's byobu window.
+Both services are managed by supervisord and started by `entrypoint.sh`. The web UI (served by the API) lets you browse your GitHub repos, pick a branch, and launch a Claude Code session — all from your browser. Once a session is running, it is accessible directly into Claude code as a remote session. A **Terminal** feature also allows the user to land inside that session's byobu window for troubleshooting.
 
 ## Repository layout
 
