@@ -120,23 +120,16 @@ spec:
       http:
         paths:
           - pathType: Prefix
-            path: /api
+            path: /tty
             backend:
               service:
                 name: claude-svc
                 port:
-                  name: api
-          - pathType: Prefix
-            path: /sessions
-            backend:
-              service:
-                name: claude-svc
-                port:
-                  name: api
+                  name: ttyd
           - pathType: Prefix
             path: /
             backend:
               service:
                 name: claude-svc
                 port:
-                  name: ttyd
+                  name: api

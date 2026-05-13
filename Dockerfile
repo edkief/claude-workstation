@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV NVM_DIR=/home/ubuntu/.nvm
 
 RUN apt-get update && apt-get install -y \
-    curl \
+    curl htop \
     git \
     build-essential \
     ca-certificates \
@@ -13,7 +13,16 @@ RUN apt-get update && apt-get install -y \
     byobu \
     supervisor \
     openssh-client \
+    unzip \
+    python3 python3-venv \
+    openjdk-21-jdk  \
     && rm -rf /var/lib/apt/lists/*
+
+RUN curl -Lo /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.14.5-bin.zip \
+    && mkdir -p /opt/gradle \
+    && unzip /tmp/gradle.zip -d /opt/gradle \
+    && rm /tmp/gradle.zip \
+    && ln -s /opt/gradle/gradle-8.14.5/bin/gradle /usr/local/bin/gradle
 
 RUN curl -Lo /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64 \
     && chmod +x /usr/local/bin/ttyd
