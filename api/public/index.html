@@ -73,6 +73,19 @@
 </section>
 
 <section>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+    <h2 style="margin-bottom:0">Workspace Cleanup</h2>
+  </div>
+  <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+    <span style="font-size:.875rem;color:#8b949e">Retain workspaces from last</span>
+    <input type="number" id="cleanup-days" min="1" value="7" style="width:4.5rem;background:#161b22;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:.45rem .65rem;font-family:inherit;font-size:.875rem">
+    <span style="font-size:.875rem;color:#8b949e">days</span>
+    <button class="btn-danger" id="cleanup-btn" onclick="cleanupWorkspaces()" style="font-size:.8rem;padding:.3rem .7rem">Clean up old workspaces</button>
+    <span id="cleanup-result" style="font-size:.875rem;color:#8b949e"></span>
+  </div>
+</section>
+
+<section>
   <h2>Start New Session</h2>
   <form id="start-form">
 
@@ -328,6 +341,52 @@ document.getElementById('start-form').addEventListener('submit', async (e) => {
     submitBtn.innerHTML = 'Start Session';
   }
 });
+
+async function cleanupWorkspaces() {
+  const btn = document.getElementById('cleanup-btn');
+  const resultEl = document.getElementById('cleanup-result');
+  const days = parseInt(document.getElementById('cleanup-days').value, 10);
+
+  if (!days || days < 1) {
+    resultEl.style.color = '#f85149';
+    resultEl.textContent = 'Enter a valid number of days.';
+    return;
+  }
+
+  if (!confirm(`Delete workspaces older than ${days} day(s)? This cannot be undone.`)) return;
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Cleaning…';
+  resultEl.style.color = '#8b949e';
+  resultEl.textContent = '';
+
+  try {
+    const res = await fetch('/api/workspaces/cleanup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ olderThanDays: days }),
+    });
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.error || 'Request failed');
+    }
+    const data = await res.json();
+    if (data.deleted.length === 0) {
+      resultEl.style.color = '#8b949e';
+      resultEl.textContent = 'No workspaces to clean up.';
+    } else {
+      resultEl.style.color = '#3fb950';
+      resultEl.textContent = `Deleted ${data.deleted.length} workspace(s), freed ${data.totalFreedMb} MB.`;
+    }
+    loadSessions();
+  } catch (err) {
+    resultEl.style.color = '#f85149';
+    resultEl.textContent = err.message || 'Cleanup failed.';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = 'Clean up old workspaces';
+  }
+}
 
 function escHtml(str) {
   return String(str)

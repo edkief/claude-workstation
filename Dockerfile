@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     vim \
     byobu \
     supervisor \
+    cron \
     openssh-client \
     unzip \
     python3 python3-venv \

@@ -11,6 +11,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const STATE_FILE = process.env.STATE_FILE || '/home/ubuntu/.claude-sessions/state.json';
 const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || '/home/ubuntu/workspace';
+const SESSIONS_ROOT = path.join(WORKSPACE_ROOT, 'sessions');
 const GITHUB_USER = process.env.GITHUB_USER || 'edkief';
 
 function readState() {
@@ -156,7 +157,7 @@ app.post('/api/sessions', (req, res) => {
     } else {
         const safeBranch = effectiveBranch.replace(/\//g, '-');
         sessionName = `${repoName}-${safeBranch}-${ts}`;
-        workspacePath = path.join(WORKSPACE_ROOT, sessionName);
+        workspacePath = path.join(SESSIONS_ROOT, sessionName);
         try {
             execSync(`git clone --branch ${branch} ${project} ${workspacePath}`, { stdio: 'pipe' });
         } catch (err) {
@@ -247,11 +248,65 @@ app.delete('/api/sessions/:name', (req, res) => {
     res.status(204).end();
 });
 
+// POST /api/workspaces/cleanup — delete session workspace directories older than N days
+app.post('/api/workspaces/cleanup', (req, res) => {
+    const { olderThanDays } = req.body;
+    if (typeof olderThanDays !== 'number' || !Number.isInteger(olderThanDays) || olderThanDays < 1) {
+        return res.status(400).json({ error: 'olderThanDays must be an integer >= 1' });
+    }
+
+    if (!fs.existsSync(SESSIONS_ROOT)) {
+        return res.json({ deleted: [], totalFreedMb: 0 });
+    }
+
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
+    const sessions = readState();
+
+    const entries = fs.readdirSync(SESSIONS_ROOT, { withFileTypes: true })
+        .filter(e => e.isDirectory())
+        .map(e => ({ dirPath: path.join(SESSIONS_ROOT, e.name), name: e.name }));
+
+    const toDelete = entries.filter(({ dirPath }) => {
+        const stateEntry = sessions.find(s => s.workspacePath === dirPath);
+        const age = stateEntry ? new Date(stateEntry.startedAt) : fs.statSync(dirPath).mtime;
+        return age < cutoff;
+    });
+
+    const deleted = [];
+    let totalFreedMb = 0;
+
+    for (const { dirPath, name } of toDelete) {
+        let sizeMb = 0;
+        try {
+            const duOut = execSync(`du -sm "${dirPath}"`, { stdio: 'pipe' }).toString();
+            sizeMb = parseInt(duOut.split('\t')[0], 10) || 0;
+        } catch { /* ignore */ }
+
+        try {
+            const stateEntry = sessions.find(s => s.workspacePath === dirPath);
+            const age = stateEntry ? new Date(stateEntry.startedAt) : fs.statSync(dirPath).mtime;
+            const ageDays = Math.floor((Date.now() - age.getTime()) / (24 * 60 * 60 * 1000));
+            fs.rmSync(dirPath, { recursive: true, force: true });
+            deleted.push({ name, path: dirPath, ageDays, sizeMb });
+            totalFreedMb += sizeMb;
+        } catch { /* skip dirs that fail to delete */ }
+    }
+
+    if (deleted.length > 0) {
+        const deletedPaths = new Set(deleted.map(d => d.path));
+        writeState(sessions.filter(s => !deletedPaths.has(s.workspacePath)));
+    }
+
+    res.json({ deleted, totalFreedMb });
+});
+
 // Serve UI for all non-API paths
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
+
+fs.mkdirSync(SESSIONS_ROOT, { recursive: true });
 
 app.listen(PORT, () => {
     console.log(`claude-session-api listening on :${PORT}`);
