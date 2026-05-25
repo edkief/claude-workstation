@@ -25,10 +25,4 @@ fi
 # POD_NAME is injected by the Downward API but sudo strips it; re-export explicitly
 export POD_NAME="${POD_NAME:-unknown}"
 
-# Daily cleanup: delete session workspaces older than 7 days at 2am
-cat > /etc/cron.d/workspace-cleanup <<'EOF'
-0 2 * * * ubuntu WORKSPACE_ROOT=/home/ubuntu/workspace STATE_FILE=/home/ubuntu/.claude-sessions/state.json /usr/bin/node /home/ubuntu/api/cleanup.js >> /var/log/workspace-cleanup.log 2>&1
-EOF
-chmod 0644 /etc/cron.d/workspace-cleanup
-
 exec sudo -E /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf

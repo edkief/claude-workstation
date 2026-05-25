@@ -82,6 +82,11 @@ COPY supervisord.conf /etc/supervisor/conf.d/workstation.conf
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Daily cleanup: delete session workspaces older than 7 days at 2am
+RUN printf '0 2 * * * ubuntu WORKSPACE_ROOT=/home/ubuntu/workspace STATE_FILE=/home/ubuntu/.claude-sessions/state.json /usr/bin/node /home/ubuntu/api/cleanup.js >> /var/log/workspace-cleanup.log 2>&1\n' \
+    > /etc/cron.d/workspace-cleanup \
+    && chmod 0644 /etc/cron.d/workspace-cleanup
+
 USER ubuntu
 WORKDIR /home/ubuntu/workspace
 
