@@ -194,7 +194,7 @@ app.post('/api/sessions', (req, res) => {
     while (Date.now() < deadline) {
         const result = spawnSync('tmux', ['capture-pane', '-t', byobuSession, '-p'], { stdio: 'pipe' });
         lastPane = result.stdout ? result.stdout.toString() : '';
-        if ((lastPane.includes('Connected') || lastPane.includes('Ready')) && lastPane.includes(sessionName)) {
+        if (lastPane.includes('Connected') || lastPane.includes('Ready')) {
             connected = true;
             break;
         }
