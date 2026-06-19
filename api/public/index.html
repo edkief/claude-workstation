@@ -5,132 +5,414 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Claude Workstation</title>
 <style>
+  /* ---------- Design tokens ---------- */
+  :root {
+    color-scheme: dark;
+    --bg:            #0d1117;
+    --surface:       #161b22;
+    --surface-2:     #21262d;
+    --border:        #30363d;
+    --border-subtle: #21262d;
+    --border-strong: #8b949e;
+
+    --text:          #e6edf3;
+    --text-muted:    #8b949e;
+    --text-subtle:   #6e7681;
+
+    --accent:        #58a6ff;
+    --accent-hover:  #79c0ff;
+    --accent-soft:   rgba(88, 166, 255, .12);
+
+    --success:       #3fb950;
+    --success-soft:  rgba(63, 185, 80, .12);
+    --danger:        #f85149;
+    --danger-soft:   rgba(248, 81, 73, .10);
+    --danger-border: rgba(248, 81, 73, .38);
+    --primary:       #238636;
+    --primary-hover: #2ea043;
+
+    --radius:        10px;
+    --radius-sm:     6px;
+    --radius-pill:   999px;
+    --shadow:        0 1px 3px rgba(1, 4, 9, .55), 0 8px 24px rgba(1, 4, 9, .25);
+
+    --font-ui:   -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --bg:            #ffffff;
+      --surface:       #f6f8fa;
+      --surface-2:     #eaeef2;
+      --border:        #d0d7de;
+      --border-subtle: #d8dee4;
+      --border-strong: #8c959f;
+
+      --text:          #1f2328;
+      --text-muted:    #656d76;
+      --text-subtle:   #818b98;
+
+      --accent:        #0969da;
+      --accent-hover:  #0860ca;
+      --accent-soft:   rgba(9, 105, 218, .10);
+
+      --success:       #1a7f37;
+      --success-soft:  rgba(26, 127, 55, .10);
+      --danger:        #cf222e;
+      --danger-soft:   rgba(207, 34, 46, .08);
+      --danger-border: rgba(207, 34, 46, .35);
+      --primary:       #1f883d;
+      --primary-hover: #1a7f37;
+
+      --shadow:        0 1px 0 rgba(31, 35, 40, .04), 0 4px 14px rgba(31, 35, 40, .08);
+    }
+  }
+
+  /* ---------- Base ---------- */
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: ui-monospace, monospace; background: #0d1117; color: #e6edf3; min-height: 100vh; padding: 2rem; }
-  h1 { font-size: 1.4rem; color: #58a6ff; margin-bottom: 2rem; }
-  h2 { font-size: 1rem; color: #8b949e; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 1rem; }
-  section { margin-bottom: 2.5rem; }
-
-  table { width: 100%; border-collapse: collapse; font-size: .875rem; }
-  th { text-align: left; color: #8b949e; font-weight: 500; padding: .5rem .75rem; border-bottom: 1px solid #21262d; }
-  td { padding: .5rem .75rem; border-bottom: 1px solid #21262d; vertical-align: middle; word-break: break-all; }
-  tr:last-child td { border-bottom: none; }
-  .status-running { color: #3fb950; }
-  .status-dead    { color: #f85149; }
-
-  form { display: grid; gap: .75rem; max-width: 520px; }
-  label { font-size: .875rem; color: #8b949e; display: flex; flex-direction: column; gap: .3rem; }
-  input[type=text], select {
-    background: #161b22; border: 1px solid #30363d; border-radius: 6px;
-    color: #e6edf3; padding: .45rem .65rem; font-family: inherit; font-size: .875rem;
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    font-family: var(--font-ui);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
   }
-  input[type=text]:focus, select:focus { outline: none; border-color: #58a6ff; }
-  select option { background: #161b22; }
-  .checkbox-row { flex-direction: row; align-items: center; gap: .5rem; cursor: pointer; }
-  input[type=checkbox] { accent-color: #58a6ff; width: 15px; height: 15px; }
-  .mode-toggle { font-size: .8rem; color: #58a6ff; cursor: pointer; text-decoration: underline; background: none; border: none; padding: 0; font-family: inherit; }
+  .wrap {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: clamp(1rem, 3vw, 2.25rem);
+    display: flex;
+    flex-direction: column;
+    gap: clamp(1rem, 2.5vw, 1.75rem);
+  }
+  code, .mono { font-family: var(--font-mono); }
+  a { color: var(--accent); }
 
-  button { font-family: inherit; font-size: .875rem; border: none; border-radius: 6px; padding: .45rem .9rem; cursor: pointer; }
-  .btn-primary  { background: #238636; color: #fff; }
-  .btn-primary:hover  { background: #2ea043; }
-  .btn-danger   { background: #21262d; color: #f85149; border: 1px solid #f8514960; }
-  .btn-danger:hover   { background: #f851491a; }
-  .btn-terminal { background: #21262d; color: #58a6ff; border: 1px solid #30363d; }
-  .btn-terminal:hover { background: #30363d; }
-
-  .empty  { color: #8b949e; font-size: .875rem; padding: .75rem 0; }
-  #msg-error   { color: #f85149; font-size: .875rem; min-height: 1.2rem; }
-  #msg-success { color: #3fb950; font-size: .875rem; min-height: 1.2rem; }
-  .repo-hint { font-size: .75rem; color: #8b949e; margin-top: .2rem; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .spinner { display: inline-block; width: 11px; height: 11px; border: 2px solid #ffffff60;
-             border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite;
-             vertical-align: middle; margin-right: .4rem; }
-  button:disabled { opacity: .55; cursor: not-allowed; }
+  /* ---------- Header ---------- */
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .topbar-inner {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: .85rem clamp(1rem, 3vw, 2.25rem);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
+  .brand h1 { font-size: 1.15rem; font-weight: 600; letter-spacing: -.01em; }
+  .brand .dot { color: var(--accent); }
+  .pod-chip {
+    font-family: var(--font-mono);
+    font-size: .72rem;
+    color: var(--text-muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    padding: .1rem .55rem;
+  }
+  .pod-chip:empty { display: none; }
+  .quick-links { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
   .quick-link {
-    font-size: .8rem; color: #8b949e; text-decoration: none;
-    border: 1px solid #30363d; border-radius: 6px; padding: .3rem .65rem;
-    background: #161b22;
+    font-size: .82rem;
+    color: var(--text-muted);
+    text-decoration: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: .35rem .7rem;
+    background: var(--surface);
+    transition: color .12s, border-color .12s, background .12s;
   }
-  .quick-link:hover { color: #e6edf3; border-color: #8b949e; }
+  .quick-link:hover { color: var(--text); border-color: var(--border-strong); }
+
+  /* ---------- Cards ---------- */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .75rem;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border-subtle);
+    flex-wrap: wrap;
+  }
+  .card-head h2 {
+    font-size: .8rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .07em;
+  }
+  .card-body { padding: 1.25rem; }
+
+  /* ---------- Sessions table ---------- */
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+  th {
+    text-align: left;
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    padding: .6rem 1.25rem;
+    border-bottom: 1px solid var(--border-subtle);
+    white-space: nowrap;
+  }
+  td {
+    padding: .7rem 1.25rem;
+    border-bottom: 1px solid var(--border-subtle);
+    vertical-align: middle;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr { transition: background .12s; }
+  tbody tr:hover { background: var(--surface-2); }
+  .cell-name { font-family: var(--font-mono); font-size: .8rem; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cell-branch { font-family: var(--font-mono); font-size: .8rem; }
+  .cell-time { color: var(--text-muted); white-space: nowrap; font-size: .82rem; }
+  .cell-actions { text-align: right; white-space: nowrap; }
+  .cell-actions .btn { margin-left: .4rem; }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    font-size: .76rem;
+    font-weight: 500;
+    padding: .15rem .55rem;
+    border-radius: var(--radius-pill);
+    text-transform: capitalize;
+  }
+  .badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .badge.running { color: var(--success); background: var(--success-soft); }
+  .badge.dead    { color: var(--danger);  background: var(--danger-soft); }
+
+  /* ---------- Forms ---------- */
+  form { display: grid; gap: 1rem; max-width: 540px; }
+  label { font-size: .85rem; color: var(--text-muted); display: flex; flex-direction: column; gap: .35rem; }
+  label > span:first-child { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; color: var(--text); font-weight: 500; }
+  .field-note { color: var(--text-muted); font-weight: 400; }
+  input[type=text], input[type=number], select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    padding: .55rem .7rem;
+    font-family: inherit;
+    font-size: .875rem;
+    width: 100%;
+    transition: border-color .12s, box-shadow .12s;
+  }
+  input::placeholder { color: var(--text-subtle); }
+  input:focus, select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  select option { background: var(--surface); color: var(--text); }
+  .checkbox-row { flex-direction: row; align-items: center; gap: .55rem; cursor: pointer; font-weight: 400; color: var(--text); }
+  input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; flex: none; }
+  .mode-toggle {
+    font-size: .78rem; color: var(--accent); cursor: pointer;
+    background: none; border: none; padding: 0; font-family: inherit; font-weight: 500;
+  }
+  .mode-toggle:hover { color: var(--accent-hover); text-decoration: underline; }
+  .repo-hint { font-size: .75rem; color: var(--text-muted); }
+
+  /* ---------- Buttons ---------- */
+  .btn {
+    font-family: inherit;
+    font-size: .82rem;
+    font-weight: 500;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    padding: .45rem .85rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: .35rem;
+    transition: background .12s, border-color .12s, color .12s;
+  }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+  .btn-primary { background: var(--primary); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+  .btn-ghost { background: var(--surface-2); color: var(--accent); border-color: var(--border); }
+  .btn-ghost:hover:not(:disabled) { border-color: var(--border-strong); }
+  .btn-danger { background: transparent; color: var(--danger); border-color: var(--danger-border); }
+  .btn-danger:hover:not(:disabled) { background: var(--danger-soft); }
+  .btn-sm { font-size: .78rem; padding: .35rem .7rem; }
+
+  /* ---------- Cleanup row ---------- */
+  .cleanup-row { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+  .cleanup-row .muted { font-size: .875rem; color: var(--text-muted); }
+  #cleanup-days { width: 4.5rem; }
+  #cleanup-result { font-size: .85rem; color: var(--text-muted); }
+
+  /* ---------- Misc ---------- */
+  .empty { color: var(--text-muted); font-size: .875rem; padding: 1.5rem; text-align: center; }
+  .form-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  .msg { font-size: .85rem; min-height: 1.2rem; }
+  #msg-error   { color: var(--danger); }
+  #msg-success { color: var(--success); }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner {
+    display: inline-block; width: 12px; height: 12px;
+    border: 2px solid rgba(255, 255, 255, .4); border-top-color: #fff;
+    border-radius: 50%; animation: spin .7s linear infinite;
+  }
+
+  /* ---------- Responsive: table → stacked cards ---------- */
+  @media (max-width: 640px) {
+    form { max-width: none; }
+    .card-body { padding: 1rem; }
+
+    table, thead, tbody, th, td, tr { display: block; }
+    thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    tbody tr {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      margin-bottom: .75rem;
+      padding: .5rem .25rem;
+      background: var(--bg);
+    }
+    tbody tr:hover { background: var(--bg); }
+    tbody tr:last-child { margin-bottom: 0; }
+    td {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      padding: .45rem .9rem;
+      border-bottom: none;
+    }
+    td::before {
+      content: attr(data-label);
+      font-size: .7rem;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: var(--text-muted);
+      font-weight: 600;
+      flex: none;
+    }
+    .cell-name { max-width: 60vw; text-align: right; }
+    .cell-actions { justify-content: flex-end; }
+    .cell-actions .btn:first-of-type { margin-left: 0; }
+  }
 </style>
 </head>
 <body>
-<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2rem">
-  <h1 style="margin-bottom:0">Claude Workstation <span id="pod-name" style="font-size:.85rem;color:#8b949e;font-weight:400"></span></h1>
-  <div style="display:flex;gap:.6rem;align-items:center">
-    <a href="/tty" target="_blank" class="quick-link">Terminal</a>
-    <a href="https://claude.ai/code" target="_blank" class="quick-link">claude.ai/code</a>
-  </div>
-</div>
 
-<section>
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
-    <h2 style="margin-bottom:0">Active Sessions</h2>
-    <button class="btn-danger" id="remove-inactive-btn" onclick="removeInactiveSessions()" style="font-size:.8rem;padding:.3rem .7rem">Remove inactive</button>
-  </div>
-  <div id="sessions-container"><p class="empty">Loading…</p></div>
-</section>
-
-<section>
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
-    <h2 style="margin-bottom:0">Workspace Cleanup</h2>
-  </div>
-  <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
-    <span style="font-size:.875rem;color:#8b949e">Retain workspaces from last</span>
-    <input type="number" id="cleanup-days" min="1" value="7" style="width:4.5rem;background:#161b22;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:.45rem .65rem;font-family:inherit;font-size:.875rem">
-    <span style="font-size:.875rem;color:#8b949e">days</span>
-    <button class="btn-danger" id="cleanup-btn" onclick="cleanupWorkspaces()" style="font-size:.8rem;padding:.3rem .7rem">Clean up old workspaces</button>
-    <span id="cleanup-result" style="font-size:.875rem;color:#8b949e"></span>
-  </div>
-</section>
-
-<section>
-  <h2>Start New Session</h2>
-  <form id="start-form">
-
-    <!-- Repo selector: dropdown or manual -->
-    <label id="label-dropdown">
-      <span>Repository <button type="button" class="mode-toggle" id="toggle-mode">(enter URL manually)</button></span>
-      <select id="repo-select" name="repo-select">
-        <option value="">Loading repositories…</option>
-      </select>
-      <span class="repo-hint" id="repo-hint"></span>
-    </label>
-
-    <label id="label-manual" style="display:none">
-      <span>Git URL <button type="button" class="mode-toggle" id="toggle-mode-back">(pick from list)</button></span>
-      <input type="text" name="project-manual" id="project-manual" placeholder="git@github.com:user/repo.git">
-    </label>
-
-    <label id="label-branch-select">
-      <span>Branch <button type="button" class="mode-toggle" id="toggle-branch-mode">(enter manually)</button></span>
-      <select id="branch-select">
-        <option value="">— select a repo first —</option>
-      </select>
-    </label>
-    <label id="label-branch-manual" style="display:none">
-      <span>Branch <button type="button" class="mode-toggle" id="toggle-branch-mode-back">(pick from list)</button></span>
-      <input type="text" id="branch-manual" placeholder="main">
-    </label>
-
-    <label>
-      <span>New branch <span style="color:#8b949e;font-weight:400">(optional — create and checkout after clone)</span></span>
-      <input type="text" id="new-branch" placeholder="feature/my-work">
-    </label>
-
-    <label class="checkbox-row">
-      <input type="checkbox" name="force">
-      Force-reset if workspace already exists for this project+branch
-    </label>
-
-    <div>
-      <button type="submit" class="btn-primary">Start Session</button>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <h1>Claude <span class="dot">·</span> Workstation</h1>
+      <span class="pod-chip" id="pod-name"></span>
     </div>
-    <div id="msg-error"></div>
-    <div id="msg-success"></div>
-  </form>
-</section>
+    <nav class="quick-links">
+      <a href="/tty" target="_blank" class="quick-link">Terminal</a>
+      <a href="https://claude.ai/code" target="_blank" class="quick-link">claude.ai/code</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Active Sessions</h2>
+      <button class="btn btn-danger btn-sm" id="remove-inactive-btn" onclick="removeInactiveSessions()">Remove inactive</button>
+    </div>
+    <div id="sessions-container"><p class="empty">Loading…</p></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Workspace Cleanup</h2>
+    </div>
+    <div class="card-body">
+      <div class="cleanup-row">
+        <span class="muted">Retain workspaces from the last</span>
+        <input type="number" id="cleanup-days" min="1" value="7">
+        <span class="muted">days</span>
+        <button class="btn btn-danger btn-sm" id="cleanup-btn" onclick="cleanupWorkspaces()">Clean up old workspaces</button>
+        <span id="cleanup-result"></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Start New Session</h2>
+    </div>
+    <div class="card-body">
+      <form id="start-form">
+
+        <!-- Repo selector: dropdown or manual -->
+        <label id="label-dropdown">
+          <span>Repository <button type="button" class="mode-toggle" id="toggle-mode">enter URL manually</button></span>
+          <select id="repo-select" name="repo-select">
+            <option value="">Loading repositories…</option>
+          </select>
+          <span class="repo-hint" id="repo-hint"></span>
+        </label>
+
+        <label id="label-manual" style="display:none">
+          <span>Git URL <button type="button" class="mode-toggle" id="toggle-mode-back">pick from list</button></span>
+          <input type="text" name="project-manual" id="project-manual" placeholder="git@github.com:user/repo.git">
+        </label>
+
+        <label id="label-branch-select">
+          <span>Branch <button type="button" class="mode-toggle" id="toggle-branch-mode">enter manually</button></span>
+          <select id="branch-select">
+            <option value="">— select a repo first —</option>
+          </select>
+        </label>
+        <label id="label-branch-manual" style="display:none">
+          <span>Branch <button type="button" class="mode-toggle" id="toggle-branch-mode-back">pick from list</button></span>
+          <input type="text" id="branch-manual" placeholder="main">
+        </label>
+
+        <label>
+          <span>New branch <span class="field-note">(optional — create and checkout after clone)</span></span>
+          <input type="text" id="new-branch" placeholder="feature/my-work">
+        </label>
+
+        <label class="checkbox-row">
+          <input type="checkbox" name="force">
+          Force-reset if a workspace already exists for this project + branch
+        </label>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Start Session</button>
+          <span id="msg-error" class="msg"></span>
+          <span id="msg-success" class="msg"></span>
+        </div>
+      </form>
+    </div>
+  </section>
+
+</main>
 
 <script>
 const TERMINAL_URL = '/tty';
@@ -226,27 +508,27 @@ function renderSessions(sessions) {
     return;
   }
   const rows = sessions.map(s => {
-    const statusClass = s.status === 'running' ? 'status-running' : 'status-dead';
+    const statusClass = s.status === 'running' ? 'running' : 'dead';
     const started = new Date(s.startedAt).toLocaleString();
     const repoLabel = s.project.replace(/^.*[:/]/, '').replace(/\.git$/, '');
     return `<tr>
-      <td title="${escHtml(s.name)}">${escHtml(s.name)}</td>
-      <td>${escHtml(repoLabel)}</td>
-      <td>${escHtml(s.branch)}</td>
-      <td>${started}</td>
-      <td class="${statusClass}">${s.status}</td>
-      <td style="white-space:nowrap">
-        <button class="btn-terminal" onclick="openTerminal('${escHtml(s.name)}')">Terminal</button>
-        <button class="btn-danger" onclick="terminateSession('${escHtml(s.name)}')">Terminate</button>
+      <td class="cell-name" data-label="Session" title="${escHtml(s.name)}">${escHtml(s.name)}</td>
+      <td data-label="Repo">${escHtml(repoLabel)}</td>
+      <td class="cell-branch" data-label="Branch">${escHtml(s.branch)}</td>
+      <td class="cell-time" data-label="Started">${started}</td>
+      <td data-label="Status"><span class="badge ${statusClass}">${escHtml(s.status)}</span></td>
+      <td class="cell-actions" data-label="Actions">
+        <button class="btn btn-ghost btn-sm" onclick="openTerminal('${escHtml(s.name)}')">Terminal</button>
+        <button class="btn btn-danger btn-sm" onclick="terminateSession('${escHtml(s.name)}')">Terminate</button>
       </td>
     </tr>`;
   }).join('');
-  container.innerHTML = `<table>
+  container.innerHTML = `<div class="table-scroll"><table>
     <thead><tr>
-      <th>Session name</th><th>Repo</th><th>Branch</th><th>Started</th><th>Status</th><th>Actions</th>
+      <th>Session</th><th>Repo</th><th>Branch</th><th>Started</th><th>Status</th><th></th>
     </tr></thead>
     <tbody>${rows}</tbody>
-  </table>`;
+  </table></div>`;
 }
 
 async function openTerminal(name) {
@@ -348,7 +630,7 @@ async function cleanupWorkspaces() {
   const days = parseInt(document.getElementById('cleanup-days').value, 10);
 
   if (!days || days < 1) {
-    resultEl.style.color = '#f85149';
+    resultEl.style.color = 'var(--danger)';
     resultEl.textContent = 'Enter a valid number of days.';
     return;
   }
@@ -357,7 +639,7 @@ async function cleanupWorkspaces() {
 
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>Cleaning…';
-  resultEl.style.color = '#8b949e';
+  resultEl.style.color = 'var(--text-muted)';
   resultEl.textContent = '';
 
   try {
@@ -372,15 +654,15 @@ async function cleanupWorkspaces() {
     }
     const data = await res.json();
     if (data.deleted.length === 0) {
-      resultEl.style.color = '#8b949e';
+      resultEl.style.color = 'var(--text-muted)';
       resultEl.textContent = 'No workspaces to clean up.';
     } else {
-      resultEl.style.color = '#3fb950';
+      resultEl.style.color = 'var(--success)';
       resultEl.textContent = `Deleted ${data.deleted.length} workspace(s), freed ${data.totalFreedMb} MB.`;
     }
     loadSessions();
   } catch (err) {
-    resultEl.style.color = '#f85149';
+    resultEl.style.color = 'var(--danger)';
     resultEl.textContent = err.message || 'Cleanup failed.';
   } finally {
     btn.disabled = false;
