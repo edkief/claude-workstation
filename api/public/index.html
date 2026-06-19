@@ -282,6 +282,49 @@
     border-radius: 50%; animation: spin .7s linear infinite;
   }
 
+  /* ---------- Confirm modal ---------- */
+  @keyframes modal-in {
+    from { opacity: 0; transform: scale(.96) translateY(-6px); }
+    to   { opacity: 1; transform: scale(1)  translateY(0); }
+  }
+  #modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(1, 4, 9, .65);
+    backdrop-filter: blur(3px);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+  }
+  @media (prefers-color-scheme: light) {
+    #modal-overlay { background: rgba(31, 35, 40, .45); }
+  }
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow), 0 0 0 1px var(--border-subtle);
+    max-width: 420px;
+    width: 100%;
+    animation: modal-in .15s ease;
+  }
+  .modal-body {
+    padding: 1.5rem 1.5rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+  }
+  .modal-body h3 { font-size: 1rem; font-weight: 600; color: var(--text); }
+  .modal-body p  { font-size: .875rem; color: var(--text-muted); line-height: 1.6; }
+  .modal-footer {
+    padding: .75rem 1.5rem 1.25rem;
+    display: flex;
+    justify-content: flex-end;
+    gap: .5rem;
+  }
+
   /* ---------- Responsive: table → stacked cards ---------- */
   @media (max-width: 640px) {
     form { max-width: none; }
@@ -414,6 +457,19 @@
 
 </main>
 
+<div id="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title" style="display:none">
+  <div class="modal">
+    <div class="modal-body">
+      <h3 id="modal-title"></h3>
+      <p id="modal-message"></p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost btn-sm" id="modal-cancel">Cancel</button>
+      <button class="btn btn-danger btn-sm" id="modal-confirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const TERMINAL_URL = '/tty';
 let manualMode = false;
@@ -537,12 +593,12 @@ async function openTerminal(name) {
 }
 
 async function terminateSession(name) {
-  if (!confirm(`Terminate session "${name}"?`)) return;
+  if (!await showConfirm('Terminate session', `Terminate session "${name}"?`, 'Terminate')) return;
   try {
     await fetch(`/api/sessions/${encodeURIComponent(name)}`, { method: 'DELETE' });
     loadSessions();
   } catch {
-    alert('Failed to terminate session.');
+    await showAlert('Error', 'Failed to terminate session.');
   }
 }
 
@@ -554,14 +610,14 @@ async function removeInactiveSessions() {
     if (!res.ok) throw new Error();
     const sessions = await res.json();
     const inactive = sessions.filter(s => s.status !== 'running');
-    if (!inactive.length) { alert('No inactive sessions to remove.'); return; }
-    if (!confirm(`Remove ${inactive.length} inactive session(s)?`)) return;
+    if (!inactive.length) { await showAlert('No inactive sessions', 'There are no inactive sessions to remove.'); return; }
+    if (!await showConfirm('Remove inactive sessions', `Remove ${inactive.length} inactive session(s)?`, 'Remove')) return;
     await Promise.all(inactive.map(s =>
       fetch(`/api/sessions/${encodeURIComponent(s.name)}`, { method: 'DELETE' })
     ));
     loadSessions();
   } catch {
-    alert('Failed to remove inactive sessions.');
+    await showAlert('Error', 'Failed to remove inactive sessions.');
   } finally {
     btn.disabled = false;
   }
@@ -635,7 +691,7 @@ async function cleanupWorkspaces() {
     return;
   }
 
-  if (!confirm(`Delete workspaces older than ${days} day(s)? This cannot be undone.`)) return;
+  if (!await showConfirm('Clean up workspaces', `Delete workspaces older than ${days} day(s)? This cannot be undone.`, 'Delete')) return;
 
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>Cleaning…';
@@ -668,6 +724,41 @@ async function cleanupWorkspaces() {
     btn.disabled = false;
     btn.innerHTML = 'Clean up old workspaces';
   }
+}
+
+function showConfirm(title, message, confirmLabel = 'Confirm', alertOnly = false) {
+  return new Promise(resolve => {
+    document.getElementById('modal-title').textContent = title;
+    document.getElementById('modal-message').textContent = message;
+    const confirmBtn = document.getElementById('modal-confirm');
+    const cancelBtn  = document.getElementById('modal-cancel');
+    confirmBtn.textContent = alertOnly ? 'OK' : confirmLabel;
+    cancelBtn.style.display = alertOnly ? 'none' : '';
+    const overlay = document.getElementById('modal-overlay');
+    overlay.style.display = 'flex';
+    confirmBtn.focus();
+
+    function cleanup(result) {
+      overlay.style.display = 'none';
+      confirmBtn.onclick = null;
+      cancelBtn.onclick = null;
+      overlay.onclick = null;
+      document.removeEventListener('keydown', onKey);
+      resolve(result);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') cleanup(false);
+      if (e.key === 'Enter' && document.activeElement === confirmBtn) cleanup(true);
+    }
+    confirmBtn.onclick = () => cleanup(true);
+    cancelBtn.onclick  = () => cleanup(false);
+    overlay.onclick    = (e) => { if (e.target === overlay) cleanup(false); };
+    document.addEventListener('keydown', onKey);
+  });
+}
+
+function showAlert(title, message) {
+  return showConfirm(title, message, '', true);
 }
 
 function escHtml(str) {
