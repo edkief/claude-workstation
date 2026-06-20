@@ -41,31 +41,9 @@ function timestamp() {
     return new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
 }
 
-function getSystemStats() {
-    let memory = null;
-    try {
-        const memMap = {};
-        for (const line of fs.readFileSync('/proc/meminfo', 'utf8').split('\n')) {
-            const m = line.match(/^(\w+):\s+(\d+)/);
-            if (m) memMap[m[1]] = parseInt(m[2], 10);
-        }
-        const totalMb = Math.round(memMap.MemTotal / 1024);
-        const availMb = Math.round(memMap.MemAvailable / 1024);
-        const usedMb = totalMb - availMb;
-        memory = { totalMb, usedMb, usedPct: +(usedMb / totalMb * 100).toFixed(1) };
-    } catch { /* /proc unavailable */ }
-
-    let loadAvg = null;
-    try {
-        const parts = fs.readFileSync('/proc/loadavg', 'utf8').trim().split(' ');
-        loadAvg = { one: parseFloat(parts[0]), five: parseFloat(parts[1]), fifteen: parseFloat(parts[2]) };
-    } catch { /* /proc unavailable */ }
-
-    return { memory, loadAvg };
-}
-
 function buildProcessTree() {
-    const r = spawnSync('ps', ['-e', '-o', 'pid=,ppid=,%cpu=,%mem=', '--no-headers'], { stdio: 'pipe' });
+    // rss is in KB; %cpu is percentage of one core (100% = 1000m)
+    const r = spawnSync('ps', ['-e', '-o', 'pid=,ppid=,%cpu=,rss=', '--no-headers'], { stdio: 'pipe' });
     const processMap = new Map();
     const children = new Map();
     if (r.status !== 0) return { processMap, children };
@@ -75,9 +53,9 @@ function buildProcessTree() {
         const pid = parseInt(parts[0], 10);
         const ppid = parseInt(parts[1], 10);
         const cpu = parseFloat(parts[2]);
-        const mem = parseFloat(parts[3]);
+        const rssKb = parseInt(parts[3], 10);
         if (isNaN(pid) || isNaN(ppid)) continue;
-        processMap.set(pid, { cpu, mem });
+        processMap.set(pid, { cpu, rssKb });
         if (!children.has(ppid)) children.set(ppid, []);
         children.get(ppid).push(pid);
     }
@@ -85,16 +63,16 @@ function buildProcessTree() {
 }
 
 function subtreeSum(rootPid, processMap, children) {
-    let cpu = 0, mem = 0;
+    let cpu = 0, rssKb = 0;
     const stack = [rootPid];
     while (stack.length) {
         const pid = stack.pop();
         const proc = processMap.get(pid);
-        if (proc) { cpu += proc.cpu; mem += proc.mem; }
+        if (proc) { cpu += proc.cpu; rssKb += proc.rssKb; }
         const kids = children.get(pid);
         if (kids) stack.push(...kids);
     }
-    return { cpu: +cpu.toFixed(2), mem: +mem.toFixed(2) };
+    return { cpu: +cpu.toFixed(2), rssKb };
 }
 
 function getSessionPids(byobuSession) {
@@ -310,7 +288,7 @@ app.delete('/api/sessions/:name', (req, res) => {
     res.status(204).end();
 });
 
-// GET /api/resources — system stats and per-session CPU/mem usage
+// GET /api/resources — per-session CPU (millicores) and memory (MiB)
 app.get('/api/resources', (req, res) => {
     const sessions = readState();
     const { processMap, children } = buildProcessTree();
@@ -319,16 +297,19 @@ app.get('/api/resources', (req, res) => {
     for (const s of sessions) {
         if (s.status !== 'running') continue;
         const panePids = getSessionPids(s.byobuSession);
-        let cpu = 0, mem = 0;
+        let cpu = 0, rssKb = 0;
         for (const pid of panePids) {
             const sums = subtreeSum(pid, processMap, children);
             cpu += sums.cpu;
-            mem += sums.mem;
+            rssKb += sums.rssKb;
         }
-        sessionStats[s.name] = { cpu: +cpu.toFixed(2), mem: +mem.toFixed(2) };
+        // cpu: %cpu sums where 100% = 1 core = 1000m
+        const cpuMillicores = Math.round(cpu * 10);
+        const memMiB = +(rssKb / 1024).toFixed(1);
+        sessionStats[s.name] = { cpuMillicores, memMiB };
     }
 
-    res.json({ system: getSystemStats(), sessions: sessionStats });
+    res.json({ sessions: sessionStats });
 });
 
 // POST /api/workspaces/cleanup — delete session workspace directories older than N days

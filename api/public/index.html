@@ -210,26 +210,6 @@
   .badge.dead    { color: var(--danger);  background: var(--danger-soft); }
 
   /* ---------- Resource monitoring ---------- */
-  .res-bar-track {
-    height: 8px; border-radius: var(--radius-pill);
-    background: var(--surface-2); overflow: hidden;
-  }
-  .res-bar-fill {
-    height: 100%; border-radius: var(--radius-pill);
-    background: var(--success); transition: width .4s ease, background .4s ease;
-  }
-  .res-bar-fill.warn { background: var(--warning); }
-  .res-bar-fill.crit { background: var(--danger); }
-  .res-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
-  @media (max-width: 480px) { .res-grid { grid-template-columns: 1fr; } }
-  .res-label {
-    font-size: .72rem; font-weight: 600; color: var(--text-muted);
-    text-transform: uppercase; letter-spacing: .07em; margin-bottom: .4rem;
-  }
-  .res-value { font-family: var(--font-mono); font-size: .82rem; color: var(--text-muted); margin-top: .35rem; }
-  .res-load-row { display: flex; gap: 1.5rem; }
-  .res-load-item { font-family: var(--font-mono); font-size: .82rem; color: var(--text-muted); }
-  .res-load-item span { color: var(--text); }
   .res-cell { font-family: var(--font-mono); font-size: .78rem; color: var(--text-muted); white-space: nowrap; }
   .res-cell.ok   { color: var(--success); }
   .res-cell.warn { color: var(--warning); }
@@ -419,30 +399,6 @@
     <div id="sessions-container"><p class="empty">Loading…</p></div>
   </section>
 
-  <section class="card" id="resources-card">
-    <div class="card-head">
-      <h2>Pod Resources</h2>
-      <span id="resources-updated" style="font-size:.75rem;color:var(--text-subtle)"></span>
-    </div>
-    <div class="card-body">
-      <div class="res-grid">
-        <div>
-          <div class="res-label">Memory</div>
-          <div class="res-bar-track"><div class="res-bar-fill" id="mem-bar" style="width:0%"></div></div>
-          <div class="res-value" id="mem-value">—</div>
-        </div>
-        <div>
-          <div class="res-label">Load Average</div>
-          <div class="res-load-row">
-            <div class="res-load-item">1m <span id="load-1">—</span></div>
-            <div class="res-load-item">5m <span id="load-5">—</span></div>
-            <div class="res-load-item">15m <span id="load-15">—</span></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
   <section class="card">
     <div class="card-head">
       <h2>Workspace Cleanup</h2>
@@ -611,36 +567,66 @@ async function loadSessions() {
   }
 }
 
+function sessionRowInner(s) {
+  const statusClass = s.status === 'running' ? 'running' : 'dead';
+  const started = new Date(s.startedAt).toLocaleString();
+  const repoLabel = s.project.replace(/^.*[:/]/, '').replace(/\.git$/, '');
+  return `
+    <td class="cell-name" data-label="Session" title="${escHtml(s.name)}">${escHtml(s.name)}</td>
+    <td data-label="Repo">${escHtml(repoLabel)}</td>
+    <td class="cell-branch" data-label="Branch">${escHtml(s.branch)}</td>
+    <td class="cell-time" data-label="Started">${started}</td>
+    <td data-label="Status"><span class="badge ${statusClass}">${escHtml(s.status)}</span></td>
+    <td data-label="CPU" class="res-cell" id="cpu-${escHtml(s.name)}">${s.status === 'running' ? '…' : '—'}</td>
+    <td data-label="Mem" class="res-cell" id="mem-${escHtml(s.name)}">${s.status === 'running' ? '…' : '—'}</td>
+    <td class="cell-actions" data-label="Actions">
+      <button class="btn btn-ghost btn-sm" onclick="openTerminal('${escHtml(s.name)}')">Terminal</button>
+      <button class="btn btn-danger btn-sm" onclick="terminateSession('${escHtml(s.name)}')">Terminate</button>
+    </td>`;
+}
+
 function renderSessions(sessions) {
   const container = document.getElementById('sessions-container');
+
   if (!sessions.length) {
     container.innerHTML = '<p class="empty">No active sessions.</p>';
     return;
   }
-  const rows = sessions.map(s => {
-    const statusClass = s.status === 'running' ? 'running' : 'dead';
-    const started = new Date(s.startedAt).toLocaleString();
-    const repoLabel = s.project.replace(/^.*[:/]/, '').replace(/\.git$/, '');
-    return `<tr data-session="${escHtml(s.name)}">
-      <td class="cell-name" data-label="Session" title="${escHtml(s.name)}">${escHtml(s.name)}</td>
-      <td data-label="Repo">${escHtml(repoLabel)}</td>
-      <td class="cell-branch" data-label="Branch">${escHtml(s.branch)}</td>
-      <td class="cell-time" data-label="Started">${started}</td>
-      <td data-label="Status"><span class="badge ${statusClass}">${escHtml(s.status)}</span></td>
-      <td data-label="CPU" class="res-cell" id="cpu-${escHtml(s.name)}">${s.status === 'running' ? '…' : '—'}</td>
-      <td data-label="Mem" class="res-cell" id="mem-${escHtml(s.name)}">${s.status === 'running' ? '…' : '—'}</td>
-      <td class="cell-actions" data-label="Actions">
-        <button class="btn btn-ghost btn-sm" onclick="openTerminal('${escHtml(s.name)}')">Terminal</button>
-        <button class="btn btn-danger btn-sm" onclick="terminateSession('${escHtml(s.name)}')">Terminate</button>
-      </td>
-    </tr>`;
-  }).join('');
-  container.innerHTML = `<div class="table-scroll"><table>
-    <thead><tr>
-      <th>Session</th><th>Repo</th><th>Branch</th><th>Started</th><th>Status</th><th>CPU</th><th>Mem</th><th></th>
-    </tr></thead>
-    <tbody>${rows}</tbody>
-  </table></div>`;
+
+  // Build the table shell once; on subsequent renders reuse it (preserves scroll position)
+  if (!container.querySelector('.table-scroll')) {
+    container.innerHTML = `<div class="table-scroll"><table>
+      <thead><tr>
+        <th>Session</th><th>Repo</th><th>Branch</th><th>Started</th><th>Status</th><th>CPU</th><th>Mem</th><th></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>`;
+  }
+
+  const tbody = container.querySelector('tbody');
+  const existing = new Map([...tbody.querySelectorAll('tr[data-session]')].map(r => [r.dataset.session, r]));
+
+  // Update or create each row, keeping DOM order in sync with data order
+  sessions.forEach((s, i) => {
+    let row = existing.get(s.name);
+    if (!row) {
+      row = document.createElement('tr');
+      row.dataset.session = s.name;
+      row.innerHTML = sessionRowInner(s);
+      existing.set(s.name, row);
+    } else {
+      const badge = row.querySelector('.badge');
+      if (badge) { badge.className = `badge ${s.status === 'running' ? 'running' : 'dead'}`; badge.textContent = s.status; }
+    }
+    const atPos = tbody.children[i];
+    if (atPos !== row) tbody.insertBefore(row, atPos || null);
+  });
+
+  // Remove rows for sessions that no longer exist
+  const currentNames = new Set(sessions.map(s => s.name));
+  for (const [name, row] of existing) {
+    if (!currentNames.has(name)) row.remove();
+  }
 }
 
 async function openTerminal(name) {
@@ -680,20 +666,24 @@ async function removeInactiveSessions() {
 }
 
 // --- Resource monitoring ---
+function fmtCpu(millicores) {
+  if (millicores >= 1000) return (millicores / 1000).toFixed(2) + ' cores';
+  return millicores + 'm';
+}
+function fmtMem(mib) {
+  if (mib >= 1024) return (mib / 1024).toFixed(2) + ' GiB';
+  return mib.toFixed(0) + ' MiB';
+}
+
 function updateResourceCells(data) {
-  function classify(pct) {
-    if (pct >= 70) return 'crit';
-    if (pct >= 30) return 'warn';
-    return 'ok';
-  }
   for (const [name, stats] of Object.entries(data.sessions || {})) {
     const cpuEl = document.getElementById(`cpu-${name}`);
     const memEl = document.getElementById(`mem-${name}`);
     if (!cpuEl || !memEl) continue;
-    cpuEl.textContent = stats.cpu.toFixed(1) + '%';
-    memEl.textContent = stats.mem.toFixed(1) + '%';
-    cpuEl.className = `res-cell ${classify(stats.cpu)}`;
-    memEl.className = `res-cell ${classify(stats.mem)}`;
+    cpuEl.textContent = fmtCpu(stats.cpuMillicores);
+    memEl.textContent = fmtMem(stats.memMiB);
+    cpuEl.className = 'res-cell';
+    memEl.className = 'res-cell';
   }
 }
 
@@ -702,23 +692,6 @@ async function loadResources() {
     const res = await fetch('/api/resources');
     if (!res.ok) return;
     const data = await res.json();
-    if (data.system?.memory) {
-      const m = data.system.memory;
-      const fill = document.getElementById('mem-bar');
-      fill.style.width = m.usedPct + '%';
-      fill.className = 'res-bar-fill' + (m.usedPct >= 85 ? ' crit' : m.usedPct >= 60 ? ' warn' : '');
-      const toGb = mb => (mb / 1024).toFixed(1);
-      document.getElementById('mem-value').textContent =
-        `${toGb(m.usedMb)} GB / ${toGb(m.totalMb)} GB (${m.usedPct}%)`;
-    }
-    if (data.system?.loadAvg) {
-      const l = data.system.loadAvg;
-      document.getElementById('load-1').textContent  = l.one;
-      document.getElementById('load-5').textContent  = l.five;
-      document.getElementById('load-15').textContent = l.fifteen;
-    }
-    document.getElementById('resources-updated').textContent =
-      'Updated ' + new Date().toLocaleTimeString();
     updateResourceCells(data);
   } catch { /* silently ignore transient errors */ }
 }
