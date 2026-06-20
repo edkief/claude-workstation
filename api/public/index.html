@@ -167,33 +167,60 @@
   }
   .card-body { padding: 1.25rem; }
 
-  /* ---------- Sessions table ---------- */
-  .table-scroll { overflow-x: auto; }
-  table { width: 100%; border-collapse: collapse; font-size: .875rem; }
-  th {
-    text-align: left;
-    color: var(--text-muted);
-    font-weight: 500;
-    font-size: .72rem;
-    text-transform: uppercase;
-    letter-spacing: .05em;
-    padding: .6rem 1.25rem;
-    border-bottom: 1px solid var(--border-subtle);
+  /* ---------- Session cards ---------- */
+  .session-list { display: flex; flex-direction: column; gap: .65rem; padding: 1.25rem; }
+  .session-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    padding: .85rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: .55rem;
+  }
+  .session-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: .75rem;
+  }
+  .session-name {
+    font-family: var(--font-mono);
+    font-size: .85rem;
+    font-weight: 600;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
-  td {
-    padding: .7rem 1.25rem;
-    border-bottom: 1px solid var(--border-subtle);
-    vertical-align: middle;
+  .session-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: .75rem;
+    flex-wrap: wrap;
   }
-  tbody tr:last-child td { border-bottom: none; }
-  tbody tr { transition: background .12s; }
-  tbody tr:hover { background: var(--surface-2); }
-  .cell-name { font-family: var(--font-mono); font-size: .8rem; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .cell-branch { font-family: var(--font-mono); font-size: .8rem; }
-  .cell-time { color: var(--text-muted); white-space: nowrap; font-size: .82rem; }
-  .cell-actions { text-align: right; white-space: nowrap; }
-  .cell-actions .btn { margin-left: .4rem; }
+  .session-repo {
+    font-family: var(--font-mono);
+    font-size: .78rem;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .session-repo .branch { color: var(--accent); }
+  .session-time { font-size: .78rem; color: var(--text-subtle); white-space: nowrap; flex-shrink: 0; }
+  .session-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: .5rem;
+    flex-wrap: wrap;
+  }
+  .session-stats { display: flex; gap: 1.25rem; }
+  .stat-item { font-size: .75rem; color: var(--text-muted); display: flex; align-items: center; gap: .3rem; }
+  .stat-item .stat-label { text-transform: uppercase; letter-spacing: .05em; font-size: .68rem; }
+  .session-actions { display: flex; gap: .4rem; flex-shrink: 0; }
 
   .badge {
     display: inline-flex;
@@ -335,42 +362,10 @@
     gap: .5rem;
   }
 
-  /* ---------- Responsive: table → stacked cards ---------- */
   @media (max-width: 640px) {
     form { max-width: none; }
     .card-body { padding: 1rem; }
-
-    table, thead, tbody, th, td, tr { display: block; }
-    thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-    tbody tr {
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      margin-bottom: .75rem;
-      padding: .5rem .25rem;
-      background: var(--bg);
-    }
-    tbody tr:hover { background: var(--bg); }
-    tbody tr:last-child { margin-bottom: 0; }
-    td {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 1rem;
-      padding: .45rem .9rem;
-      border-bottom: none;
-    }
-    td::before {
-      content: attr(data-label);
-      font-size: .7rem;
-      text-transform: uppercase;
-      letter-spacing: .05em;
-      color: var(--text-muted);
-      font-weight: 600;
-      flex: none;
-    }
-    .cell-name { max-width: 60vw; text-align: right; }
-    .cell-actions { justify-content: flex-end; }
-    .cell-actions .btn:first-of-type { margin-left: 0; }
+    .session-list { padding: 1rem; }
   }
 </style>
 </head>
@@ -567,22 +562,34 @@ async function loadSessions() {
   }
 }
 
-function sessionRowInner(s) {
+function makeSessionCard(s) {
   const statusClass = s.status === 'running' ? 'running' : 'dead';
   const started = new Date(s.startedAt).toLocaleString();
   const repoLabel = s.project.replace(/^.*[:/]/, '').replace(/\.git$/, '');
-  return `
-    <td class="cell-name" data-label="Session" title="${escHtml(s.name)}">${escHtml(s.name)}</td>
-    <td data-label="Repo">${escHtml(repoLabel)}</td>
-    <td class="cell-branch" data-label="Branch">${escHtml(s.branch)}</td>
-    <td class="cell-time" data-label="Started">${started}</td>
-    <td data-label="Status"><span class="badge ${statusClass}">${escHtml(s.status)}</span></td>
-    <td data-label="CPU" class="res-cell" id="cpu-${escHtml(s.name)}">${s.status === 'running' ? '…' : '—'}</td>
-    <td data-label="Mem" class="res-cell" id="mem-${escHtml(s.name)}">${s.status === 'running' ? '…' : '—'}</td>
-    <td class="cell-actions" data-label="Actions">
-      <button class="btn btn-ghost btn-sm" onclick="openTerminal('${escHtml(s.name)}')">Terminal</button>
-      <button class="btn btn-danger btn-sm" onclick="terminateSession('${escHtml(s.name)}')">Terminate</button>
-    </td>`;
+  const resPlaceholder = s.status === 'running' ? '…' : '—';
+  const card = document.createElement('div');
+  card.className = 'session-card';
+  card.dataset.session = s.name;
+  card.innerHTML = `
+    <div class="session-card-head">
+      <span class="session-name" title="${escHtml(s.name)}">${escHtml(s.name)}</span>
+      <span class="badge ${statusClass}">${escHtml(s.status)}</span>
+    </div>
+    <div class="session-meta">
+      <span class="session-repo">${escHtml(repoLabel)} <span class="branch">${escHtml(s.branch)}</span></span>
+      <span class="session-time">${started}</span>
+    </div>
+    <div class="session-footer">
+      <div class="session-stats">
+        <span class="stat-item"><span class="stat-label">CPU</span><span class="res-cell" id="cpu-${escHtml(s.name)}">${resPlaceholder}</span></span>
+        <span class="stat-item"><span class="stat-label">Mem</span><span class="res-cell" id="mem-${escHtml(s.name)}">${resPlaceholder}</span></span>
+      </div>
+      <div class="session-actions">
+        <button class="btn btn-ghost btn-sm" onclick="openTerminal('${escHtml(s.name)}')">Terminal</button>
+        <button class="btn btn-danger btn-sm" onclick="terminateSession('${escHtml(s.name)}')">Terminate</button>
+      </div>
+    </div>`;
+  return card;
 }
 
 function renderSessions(sessions) {
@@ -593,39 +600,30 @@ function renderSessions(sessions) {
     return;
   }
 
-  // Build the table shell once; on subsequent renders reuse it (preserves scroll position)
-  if (!container.querySelector('.table-scroll')) {
-    container.innerHTML = `<div class="table-scroll"><table>
-      <thead><tr>
-        <th>Session</th><th>Repo</th><th>Branch</th><th>Started</th><th>Status</th><th>CPU</th><th>Mem</th><th></th>
-      </tr></thead>
-      <tbody></tbody>
-    </table></div>`;
+  // Create the list shell once; reuse on subsequent renders so DOM state is preserved
+  if (!container.querySelector('.session-list')) {
+    container.innerHTML = '<div class="session-list"></div>';
   }
 
-  const tbody = container.querySelector('tbody');
-  const existing = new Map([...tbody.querySelectorAll('tr[data-session]')].map(r => [r.dataset.session, r]));
+  const list = container.querySelector('.session-list');
+  const existing = new Map([...list.querySelectorAll('[data-session]')].map(c => [c.dataset.session, c]));
 
-  // Update or create each row, keeping DOM order in sync with data order
   sessions.forEach((s, i) => {
-    let row = existing.get(s.name);
-    if (!row) {
-      row = document.createElement('tr');
-      row.dataset.session = s.name;
-      row.innerHTML = sessionRowInner(s);
-      existing.set(s.name, row);
+    let card = existing.get(s.name);
+    if (!card) {
+      card = makeSessionCard(s);
+      existing.set(s.name, card);
     } else {
-      const badge = row.querySelector('.badge');
+      const badge = card.querySelector('.badge');
       if (badge) { badge.className = `badge ${s.status === 'running' ? 'running' : 'dead'}`; badge.textContent = s.status; }
     }
-    const atPos = tbody.children[i];
-    if (atPos !== row) tbody.insertBefore(row, atPos || null);
+    const atPos = list.children[i];
+    if (atPos !== card) list.insertBefore(card, atPos || null);
   });
 
-  // Remove rows for sessions that no longer exist
   const currentNames = new Set(sessions.map(s => s.name));
-  for (const [name, row] of existing) {
-    if (!currentNames.has(name)) row.remove();
+  for (const [name, card] of existing) {
+    if (!currentNames.has(name)) card.remove();
   }
 }
 
