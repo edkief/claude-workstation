@@ -30,6 +30,8 @@
     --danger-border: rgba(248, 81, 73, .38);
     --primary:       #238636;
     --primary-hover: #2ea043;
+    --warning:       #d29922;
+    --warning-soft:  rgba(210, 153, 34, .12);
 
     --radius:        10px;
     --radius-sm:     6px;
@@ -65,6 +67,8 @@
       --danger-border: rgba(207, 34, 46, .35);
       --primary:       #1f883d;
       --primary-hover: #1a7f37;
+      --warning:       #9a6700;
+      --warning-soft:  rgba(154, 103, 0, .10);
 
       --shadow:        0 1px 0 rgba(31, 35, 40, .04), 0 4px 14px rgba(31, 35, 40, .08);
     }
@@ -204,6 +208,32 @@
   .badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
   .badge.running { color: var(--success); background: var(--success-soft); }
   .badge.dead    { color: var(--danger);  background: var(--danger-soft); }
+
+  /* ---------- Resource monitoring ---------- */
+  .res-bar-track {
+    height: 8px; border-radius: var(--radius-pill);
+    background: var(--surface-2); overflow: hidden;
+  }
+  .res-bar-fill {
+    height: 100%; border-radius: var(--radius-pill);
+    background: var(--success); transition: width .4s ease, background .4s ease;
+  }
+  .res-bar-fill.warn { background: var(--warning); }
+  .res-bar-fill.crit { background: var(--danger); }
+  .res-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+  @media (max-width: 480px) { .res-grid { grid-template-columns: 1fr; } }
+  .res-label {
+    font-size: .72rem; font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: .07em; margin-bottom: .4rem;
+  }
+  .res-value { font-family: var(--font-mono); font-size: .82rem; color: var(--text-muted); margin-top: .35rem; }
+  .res-load-row { display: flex; gap: 1.5rem; }
+  .res-load-item { font-family: var(--font-mono); font-size: .82rem; color: var(--text-muted); }
+  .res-load-item span { color: var(--text); }
+  .res-cell { font-family: var(--font-mono); font-size: .78rem; color: var(--text-muted); white-space: nowrap; }
+  .res-cell.ok   { color: var(--success); }
+  .res-cell.warn { color: var(--warning); }
+  .res-cell.crit { color: var(--danger); }
 
   /* ---------- Forms ---------- */
   form { display: grid; gap: 1rem; max-width: 540px; }
@@ -389,6 +419,30 @@
     <div id="sessions-container"><p class="empty">Loading…</p></div>
   </section>
 
+  <section class="card" id="resources-card">
+    <div class="card-head">
+      <h2>Pod Resources</h2>
+      <span id="resources-updated" style="font-size:.75rem;color:var(--text-subtle)"></span>
+    </div>
+    <div class="card-body">
+      <div class="res-grid">
+        <div>
+          <div class="res-label">Memory</div>
+          <div class="res-bar-track"><div class="res-bar-fill" id="mem-bar" style="width:0%"></div></div>
+          <div class="res-value" id="mem-value">—</div>
+        </div>
+        <div>
+          <div class="res-label">Load Average</div>
+          <div class="res-load-row">
+            <div class="res-load-item">1m <span id="load-1">—</span></div>
+            <div class="res-load-item">5m <span id="load-5">—</span></div>
+            <div class="res-load-item">15m <span id="load-15">—</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section class="card">
     <div class="card-head">
       <h2>Workspace Cleanup</h2>
@@ -567,12 +621,14 @@ function renderSessions(sessions) {
     const statusClass = s.status === 'running' ? 'running' : 'dead';
     const started = new Date(s.startedAt).toLocaleString();
     const repoLabel = s.project.replace(/^.*[:/]/, '').replace(/\.git$/, '');
-    return `<tr>
+    return `<tr data-session="${escHtml(s.name)}">
       <td class="cell-name" data-label="Session" title="${escHtml(s.name)}">${escHtml(s.name)}</td>
       <td data-label="Repo">${escHtml(repoLabel)}</td>
       <td class="cell-branch" data-label="Branch">${escHtml(s.branch)}</td>
       <td class="cell-time" data-label="Started">${started}</td>
       <td data-label="Status"><span class="badge ${statusClass}">${escHtml(s.status)}</span></td>
+      <td data-label="CPU" class="res-cell" id="cpu-${escHtml(s.name)}">${s.status === 'running' ? '…' : '—'}</td>
+      <td data-label="Mem" class="res-cell" id="mem-${escHtml(s.name)}">${s.status === 'running' ? '…' : '—'}</td>
       <td class="cell-actions" data-label="Actions">
         <button class="btn btn-ghost btn-sm" onclick="openTerminal('${escHtml(s.name)}')">Terminal</button>
         <button class="btn btn-danger btn-sm" onclick="terminateSession('${escHtml(s.name)}')">Terminate</button>
@@ -581,7 +637,7 @@ function renderSessions(sessions) {
   }).join('');
   container.innerHTML = `<div class="table-scroll"><table>
     <thead><tr>
-      <th>Session</th><th>Repo</th><th>Branch</th><th>Started</th><th>Status</th><th></th>
+      <th>Session</th><th>Repo</th><th>Branch</th><th>Started</th><th>Status</th><th>CPU</th><th>Mem</th><th></th>
     </tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
@@ -621,6 +677,50 @@ async function removeInactiveSessions() {
   } finally {
     btn.disabled = false;
   }
+}
+
+// --- Resource monitoring ---
+function updateResourceCells(data) {
+  function classify(pct) {
+    if (pct >= 70) return 'crit';
+    if (pct >= 30) return 'warn';
+    return 'ok';
+  }
+  for (const [name, stats] of Object.entries(data.sessions || {})) {
+    const cpuEl = document.getElementById(`cpu-${name}`);
+    const memEl = document.getElementById(`mem-${name}`);
+    if (!cpuEl || !memEl) continue;
+    cpuEl.textContent = stats.cpu.toFixed(1) + '%';
+    memEl.textContent = stats.mem.toFixed(1) + '%';
+    cpuEl.className = `res-cell ${classify(stats.cpu)}`;
+    memEl.className = `res-cell ${classify(stats.mem)}`;
+  }
+}
+
+async function loadResources() {
+  try {
+    const res = await fetch('/api/resources');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.system?.memory) {
+      const m = data.system.memory;
+      const fill = document.getElementById('mem-bar');
+      fill.style.width = m.usedPct + '%';
+      fill.className = 'res-bar-fill' + (m.usedPct >= 85 ? ' crit' : m.usedPct >= 60 ? ' warn' : '');
+      const toGb = mb => (mb / 1024).toFixed(1);
+      document.getElementById('mem-value').textContent =
+        `${toGb(m.usedMb)} GB / ${toGb(m.totalMb)} GB (${m.usedPct}%)`;
+    }
+    if (data.system?.loadAvg) {
+      const l = data.system.loadAvg;
+      document.getElementById('load-1').textContent  = l.one;
+      document.getElementById('load-5').textContent  = l.five;
+      document.getElementById('load-15').textContent = l.fifteen;
+    }
+    document.getElementById('resources-updated').textContent =
+      'Updated ' + new Date().toLocaleTimeString();
+    updateResourceCells(data);
+  } catch { /* silently ignore transient errors */ }
 }
 
 // --- Form submit ---
@@ -773,7 +873,9 @@ fetch('/api/info').then(r => r.json()).then(d => {
 
 loadRepos();
 loadSessions();
-setInterval(loadSessions, 10000);
+loadResources();
+setInterval(loadSessions,  10_000);
+setInterval(loadResources,  5_000);
 </script>
 </body>
 </html>
