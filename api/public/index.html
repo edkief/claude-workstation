@@ -217,9 +217,7 @@
     gap: .5rem;
     flex-wrap: wrap;
   }
-  .session-stats { display: flex; gap: 1.25rem; }
-  .stat-item { font-size: .75rem; color: var(--text-muted); display: flex; align-items: center; gap: .3rem; }
-  .stat-item .stat-label { text-transform: uppercase; letter-spacing: .05em; font-size: .68rem; }
+  .session-stats { display: flex; gap: 1rem; flex-grow: 1; }
   .session-actions { display: flex; gap: .4rem; flex-shrink: 0; }
 
   .badge {
@@ -237,10 +235,22 @@
   .badge.dead    { color: var(--danger);  background: var(--danger-soft); }
 
   /* ---------- Resource monitoring ---------- */
-  .res-cell { font-family: var(--font-mono); font-size: .78rem; color: var(--text-muted); white-space: nowrap; }
-  .res-cell.ok   { color: var(--success); }
-  .res-cell.warn { color: var(--warning); }
-  .res-cell.crit { color: var(--danger); }
+  .session-stats { display: flex; gap: 1rem; flex-grow: 1; }
+  .stat-bar-group { display: flex; flex-direction: column; gap: .2rem; min-width: 90px; flex: 1; max-width: 140px; }
+  .stat-bar-row { display: flex; justify-content: space-between; align-items: baseline; gap: .25rem; }
+  .stat-label { text-transform: uppercase; letter-spacing: .06em; font-size: .63rem; color: var(--text-muted); }
+  .stat-value { font-family: var(--font-mono); font-size: .72rem; color: var(--text); white-space: nowrap; }
+  .stat-value.placeholder { color: var(--text-muted); }
+  .stat-bar-track { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .stat-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    width: 0%;
+    background: var(--success);
+    transition: width .5s cubic-bezier(.4,0,.2,1), background-color .4s ease;
+  }
+  .stat-bar-fill.warn { background: var(--warning); }
+  .stat-bar-fill.crit { background: var(--danger); }
 
   /* ---------- Forms ---------- */
   form { display: grid; gap: 1rem; max-width: 540px; }
@@ -581,8 +591,20 @@ function makeSessionCard(s) {
     </div>
     <div class="session-footer">
       <div class="session-stats">
-        <span class="stat-item"><span class="stat-label">CPU</span><span class="res-cell" id="cpu-${escHtml(s.name)}">${resPlaceholder}</span></span>
-        <span class="stat-item"><span class="stat-label">Mem</span><span class="res-cell" id="mem-${escHtml(s.name)}">${resPlaceholder}</span></span>
+        <div class="stat-bar-group">
+          <div class="stat-bar-row">
+            <span class="stat-label">CPU</span>
+            <span class="stat-value placeholder" id="cpu-${escHtml(s.name)}">${resPlaceholder}</span>
+          </div>
+          <div class="stat-bar-track"><div class="stat-bar-fill" id="cpu-bar-${escHtml(s.name)}"></div></div>
+        </div>
+        <div class="stat-bar-group">
+          <div class="stat-bar-row">
+            <span class="stat-label">Mem</span>
+            <span class="stat-value placeholder" id="mem-${escHtml(s.name)}">${resPlaceholder}</span>
+          </div>
+          <div class="stat-bar-track"><div class="stat-bar-fill" id="mem-bar-${escHtml(s.name)}"></div></div>
+        </div>
       </div>
       <div class="session-actions">
         <button class="btn btn-ghost btn-sm" onclick="openTerminal('${escHtml(s.name)}')">Terminal</button>
@@ -673,15 +695,33 @@ function fmtMem(mib) {
   return mib.toFixed(0) + ' MiB';
 }
 
+const CPU_MAX  = 2000;  // millicores
+const MEM_MAX  = 2048;  // MiB
+
+function barLevel(pct) {
+  if (pct >= 85) return 'crit';
+  if (pct >= 60) return 'warn';
+  return '';
+}
+
 function updateResourceCells(data) {
   for (const [name, stats] of Object.entries(data.sessions || {})) {
-    const cpuEl = document.getElementById(`cpu-${name}`);
-    const memEl = document.getElementById(`mem-${name}`);
+    const cpuEl    = document.getElementById(`cpu-${name}`);
+    const memEl    = document.getElementById(`mem-${name}`);
+    const cpuBar   = document.getElementById(`cpu-bar-${name}`);
+    const memBar   = document.getElementById(`mem-bar-${name}`);
     if (!cpuEl || !memEl) continue;
+
+    const cpuPct = Math.min(100, (stats.cpuMillicores / CPU_MAX) * 100);
+    const memPct = Math.min(100, (stats.memMiB / MEM_MAX) * 100);
+
     cpuEl.textContent = fmtCpu(stats.cpuMillicores);
     memEl.textContent = fmtMem(stats.memMiB);
-    cpuEl.className = 'res-cell';
-    memEl.className = 'res-cell';
+    cpuEl.className = 'stat-value';
+    memEl.className = 'stat-value';
+
+    if (cpuBar) { cpuBar.style.width = cpuPct + '%'; cpuBar.className = 'stat-bar-fill ' + barLevel(cpuPct); }
+    if (memBar) { memBar.style.width = memPct + '%'; memBar.className = 'stat-bar-fill ' + barLevel(memPct); }
   }
 }
 
