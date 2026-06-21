@@ -309,7 +309,9 @@ app.get('/api/resources', (req, res) => {
         sessionStats[s.name] = { cpuMillicores, memMiB };
     }
 
-    res.json({ sessions: sessionStats });
+    const totalCpu = Object.values(sessionStats).reduce((s, v) => s + v.cpuMillicores, 0);
+    const totalMem = Object.values(sessionStats).reduce((s, v) => s + v.memMiB, 0);
+    res.json({ sessions: sessionStats, totals: { cpuMillicores: totalCpu, memMiB: +totalMem.toFixed(1) } });
 });
 
 // POST /api/workspaces/cleanup — delete session workspace directories older than N days

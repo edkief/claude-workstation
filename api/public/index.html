@@ -115,6 +115,9 @@
     gap: 1rem;
     flex-wrap: wrap;
   }
+  .topbar-overall { display: flex; gap: .75rem; align-items: flex-end; margin-left: auto; margin-right: .5rem; }
+  .topbar-overall .stat-bar-group { min-width: 80px; max-width: 110px; }
+  .topbar-overall .stat-bar-track { height: 3px; }
   .brand { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
   .brand h1 { font-size: 1.15rem; font-weight: 600; letter-spacing: -.01em; }
   .brand .dot { color: var(--accent); }
@@ -386,6 +389,22 @@
     <div class="brand">
       <h1>Claude <span class="dot">·</span> Workstation</h1>
       <span class="pod-chip" id="pod-name"></span>
+    </div>
+    <div class="topbar-overall">
+      <div class="stat-bar-group">
+        <div class="stat-bar-row">
+          <span class="stat-label">CPU</span>
+          <span class="stat-value placeholder" id="overall-cpu">—</span>
+        </div>
+        <div class="stat-bar-track"><div class="stat-bar-fill" id="overall-cpu-bar"></div></div>
+      </div>
+      <div class="stat-bar-group">
+        <div class="stat-bar-row">
+          <span class="stat-label">Mem</span>
+          <span class="stat-value placeholder" id="overall-mem">—</span>
+        </div>
+        <div class="stat-bar-track"><div class="stat-bar-fill" id="overall-mem-bar"></div></div>
+      </div>
     </div>
     <nav class="quick-links">
       <a href="/tty" target="_blank" class="quick-link">Terminal</a>
@@ -722,6 +741,20 @@ function updateResourceCells(data) {
 
     if (cpuBar) { cpuBar.style.width = cpuPct + '%'; cpuBar.className = 'stat-bar-fill ' + barLevel(cpuPct); }
     if (memBar) { memBar.style.width = memPct + '%'; memBar.className = 'stat-bar-fill ' + barLevel(memPct); }
+  }
+
+  if (data.totals) {
+    const t = data.totals;
+    const oCpuEl  = document.getElementById('overall-cpu');
+    const oMemEl  = document.getElementById('overall-mem');
+    const oCpuBar = document.getElementById('overall-cpu-bar');
+    const oMemBar = document.getElementById('overall-mem-bar');
+    const cpuPct  = Math.min(100, (t.cpuMillicores / CPU_MAX) * 100);
+    const memPct  = Math.min(100, (t.memMiB / MEM_MAX) * 100);
+    if (oCpuEl)  { oCpuEl.textContent = fmtCpu(t.cpuMillicores); oCpuEl.className = 'stat-value'; }
+    if (oMemEl)  { oMemEl.textContent = fmtMem(t.memMiB); oMemEl.className = 'stat-value'; }
+    if (oCpuBar) { oCpuBar.style.width = cpuPct + '%'; oCpuBar.className = 'stat-bar-fill ' + barLevel(cpuPct); }
+    if (oMemBar) { oMemBar.style.width = memPct + '%'; oMemBar.className = 'stat-bar-fill ' + barLevel(memPct); }
   }
 }
 
