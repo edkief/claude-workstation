@@ -314,6 +314,20 @@ app.get('/api/resources', (req, res) => {
     res.json({ sessions: sessionStats, totals: { cpuMillicores: totalCpu, memMiB: +totalMem.toFixed(1) } });
 });
 
+// GET /api/disk — df -h on the workspace mount
+app.get('/api/disk', (req, res) => {
+    const workspaceRoot = process.env.WORKSPACE_ROOT || '/home/ubuntu/workspace';
+    try {
+        const stdout = execSync(`df -h "${workspaceRoot}"`).toString();
+        const lines = stdout.trim().split('\n');
+        if (lines.length < 2) return res.status(500).json({ error: 'unexpected df output' });
+        const parts = lines[1].split(/\s+/);
+        res.json({ size: parts[1], used: parts[2], avail: parts[3], usePercent: parts[4], raw: stdout.trim() });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // POST /api/workspaces/cleanup — delete session workspace directories older than N days
 app.post('/api/workspaces/cleanup', (req, res) => {
     const { olderThanDays } = req.body;
