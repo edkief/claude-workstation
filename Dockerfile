@@ -32,7 +32,7 @@ RUN echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 USER ubuntu
 
-RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash \
+RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.5/install.sh | bash \
     && . "$NVM_DIR/nvm.sh" \
     && nvm install 24 \
     && nvm alias default 24 \
@@ -56,10 +56,11 @@ COPY --chown=ubuntu:ubuntu api/ ./
 RUN mkdir -p /home/ubuntu/workspace /home/ubuntu/.claude-sessions \
     && echo '[]' > /home/ubuntu/.claude-sessions/state.json
 
-# Pre-configure byobu to use tmux-style keybindings (ctrl+b) so the first-run
-# "screen or tmux?" prompt never appears on pod restart.
+# Pre-select the tmux backend and the ctrl-a escape mode so byobu's first-run
+# "Configure Byobu's ctrl-a behavior..." prompt never appears on pod restart.
 RUN mkdir -p /home/ubuntu/.byobu \
-    && ln -sf /usr/share/byobu/keybindings/tmux-screen-keys.conf
+    && byobu-select-backend tmux \
+    && BYOBU_BACKEND=tmux byobu-ctrl-a screen
 
 RUN git config --global user.name "Edouard Kieffer" \
     && git config --global user.email "edkief@users.noreply.github.com"
