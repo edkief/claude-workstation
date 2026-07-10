@@ -69,6 +69,8 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
+        - name: CLAUDE_CODE_VERSION
+          value: "latest"
         - name: GITHUB_TOKEN
           valueFrom:
             secretKeyRef:

@@ -25,4 +25,18 @@ fi
 # POD_NAME is injected by the Downward API but sudo strips it; re-export explicitly
 export POD_NAME="${POD_NAME:-unknown}"
 
+# Install/upgrade Claude Code to the requested version on every pod start, so a
+# newer CLI can be picked up without rebuilding the image (just bump the env
+# var + roll the pod). Falls back to whatever the image already has if this fails.
+export NVM_DIR="/home/ubuntu/.nvm"
+CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-latest}"
+if [ -s "$NVM_DIR/nvm.sh" ]; then
+    . "$NVM_DIR/nvm.sh"
+    CURRENT_VERSION="$(claude --version 2>/dev/null | awk '{print $1}' || true)"
+    if [ "$CLAUDE_CODE_VERSION" = "latest" ] || [ "$CURRENT_VERSION" != "$CLAUDE_CODE_VERSION" ]; then
+        npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+            || echo "WARN: claude-code install failed, keeping existing version ${CURRENT_VERSION:-unknown}"
+    fi
+fi
+
 exec sudo -E /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf
