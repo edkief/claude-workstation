@@ -17,9 +17,9 @@ Both services are managed by supervisord and started by `entrypoint.sh`.
 
 | File/Dir | Purpose |
 |---|---|
-| `Dockerfile` | Ubuntu 24.04 image; installs Node 24 (via nvm), Claude Code CLI, byobu, ttyd, supervisord |
-| `entrypoint.sh` | Copies SSH keys from Kubernetes secret, initializes session state, exports env vars, starts supervisord |
-| `supervisord.conf` | Defines `ttyd` (port 7681) and `api` (port 3000) programs |
+| `Dockerfile` | Ubuntu 24.04 image; installs Node 24 (via nvm), Claude Code CLI, GitHub CLI (`gh`), byobu, ttyd, supervisord, PostgreSQL, Playwright + Chromium |
+| `entrypoint.sh` | Copies SSH keys from Kubernetes secret, initializes session state, initializes the PostgreSQL cluster, registers the Playwright MCP server, exports env vars, starts supervisord |
+| `supervisord.conf` | Defines `ttyd` (port 7681), `api` (port 3000), `postgres` (port 5432), and `cron` programs |
 | `api/server.js` | Express REST API — session lifecycle, GitHub repo/branch listing |
 | `api/public/index.html` | Single-page web UI — lists sessions, launches new ones |
 | `claude-pod.yaml` | Kubernetes Deployment, PVC (20 Gi), Service, and Ingress manifests |
@@ -46,6 +46,20 @@ The PVC (`claude-workspace-pvc`, 20 Gi, ReadWriteOnce) is mounted at three paths
 | `/home/ubuntu/.claude.json` | `.claude.json` |
 
 This means workspace data, Claude Code config, and session state all survive pod restarts.
+
+## PostgreSQL
+
+A PostgreSQL server runs in-container (managed by supervisord) and listens on `localhost:5432`. It is intended as a scratch DB for agents that need one — not exposed outside the pod.
+
+- Superuser / password: `postgres` / `postgres`
+- Connect over TCP: `psql -h localhost -U postgres` (scram password auth)
+- Connect over the local socket: `psql -U postgres` (trust auth, no password)
+- The data directory (`PGDATA=/home/ubuntu/pgdata`) lives in the container's ephemeral layer — **not** on the PVC — so every pod start gets a fresh, empty cluster. `entrypoint.sh` runs `initdb` whenever `PGDATA/PG_VERSION` is absent (i.e. each new container). Anything worth keeping (seed SQL, migrations, `pg_dump` output) belongs in the repo, which does persist.
+- Ran in-container rather than as a sidecar: single-replica `Recreate` deployment, one RWO PVC, and the agent reaches it on `localhost` with no cross-container wiring.
+
+## Browser automation (Playwright)
+
+The image ships Playwright with Chromium and its OS dependencies (`PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`), plus the `@playwright/mcp` server. `entrypoint.sh` registers the Playwright MCP server (headless Chromium) with Claude Code at the `user` scope on first boot (idempotent), so Claude can drive a browser for testing. Test suites can also use the globally installed `playwright` package directly.
 
 ### Secrets
 

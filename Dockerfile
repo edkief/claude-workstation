@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y \
     unzip \
     python3 python3-venv \
     openjdk-21-jdk  \
+    postgresql postgresql-contrib \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -Lo /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.14.5-bin.zip \
@@ -27,6 +28,15 @@ RUN curl -Lo /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.
 
 RUN curl -Lo /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64 \
     && chmod +x /usr/local/bin/ttyd
+
+# GitHub CLI (gh) from the official apt repo
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y gh \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
@@ -46,6 +56,19 @@ RUN . "$NVM_DIR/nvm.sh" \
     && ln -s "$(which npm)"  /usr/local/bin/npm \
     && ln -s "$(which npx)"  /usr/local/bin/npx \
     && ln -s "$(which pnpm)" /usr/local/bin/pnpm
+
+# Playwright: the CLI/library (as ubuntu) plus the MCP server so Claude can drive
+# a browser for testing, and the Chromium browser + its OS deps installed to a
+# shared, container-wide path (as root) so every process can find them.
+USER ubuntu
+RUN . "$NVM_DIR/nvm.sh" \
+    && npm install -g playwright @playwright/mcp
+USER root
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN . "$NVM_DIR/nvm.sh" \
+    && apt-get update \
+    && playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
 
 USER ubuntu
 WORKDIR /home/ubuntu/api
@@ -91,6 +114,6 @@ RUN printf '0 2 * * * ubuntu WORKSPACE_ROOT=/home/ubuntu/workspace STATE_FILE=/h
 USER ubuntu
 WORKDIR /home/ubuntu/workspace
 
-EXPOSE 7681 3000
+EXPOSE 7681 3000 5432
 
 CMD ["/usr/local/bin/entrypoint.sh"]

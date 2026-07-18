@@ -37,6 +37,31 @@ if [ -s "$NVM_DIR/nvm.sh" ]; then
         npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
             || echo "WARN: claude-code install failed, keeping existing version ${CURRENT_VERSION:-unknown}"
     fi
+
+    # Register the Playwright MCP server so Claude Code can drive a headless
+    # Chromium for browser testing. Idempotent: skipped once it exists in the
+    # (PVC-backed) user config.
+    if command -v claude >/dev/null 2>&1; then
+        claude mcp get playwright >/dev/null 2>&1 \
+            || claude mcp add playwright --scope user -- \
+                 npx -y @playwright/mcp@latest --headless --browser chromium >/dev/null 2>&1 \
+            || echo "WARN: could not register playwright MCP server"
+    fi
+fi
+
+# PostgreSQL: initialize the cluster on container start (postgres/postgres, scram
+# password auth over TCP, trust for local socket). PGDATA is in the ephemeral
+# layer, so each new pod gets a fresh DB. supervisord then runs it.
+export PGDATA="/home/ubuntu/pgdata"
+PG_BIN="$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -1)"
+if [ -n "$PG_BIN" ] && [ ! -s "$PGDATA/PG_VERSION" ]; then
+    mkdir -p "$PGDATA"
+    chmod 700 "$PGDATA"
+    echo 'postgres' > /tmp/pgpw
+    "$PG_BIN/initdb" -D "$PGDATA" -U postgres \
+        --auth-local=trust --auth-host=scram-sha-256 --pwfile=/tmp/pgpw \
+        || echo "WARN: postgres initdb failed"
+    rm -f /tmp/pgpw
 fi
 
 exec sudo -E /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf
