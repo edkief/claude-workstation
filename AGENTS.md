@@ -53,7 +53,7 @@ A PostgreSQL server runs in-container (managed by supervisord) and listens on `l
 
 - Superuser / password: `postgres` / `postgres`
 - Connect over TCP: `psql -h localhost -U postgres` (scram password auth)
-- Connect over the local socket: `psql -U postgres` (trust auth, no password)
+- Connect over the local socket: `psql -h /home/ubuntu/pgdata -U postgres` (trust auth, no password). The socket dir is pinned to PGDATA because `/var/run/postgresql` is owned by the distro `postgres` user and can't be chowned inside the container.
 - The data directory (`PGDATA=/home/ubuntu/pgdata`) lives in the container's ephemeral layer — **not** on the PVC — so every pod start gets a fresh, empty cluster. `entrypoint.sh` runs `initdb` whenever `PGDATA/PG_VERSION` is absent (i.e. each new container). Anything worth keeping (seed SQL, migrations, `pg_dump` output) belongs in the repo, which does persist.
 - Ran in-container rather than as a sidecar: single-replica `Recreate` deployment, one RWO PVC, and the agent reaches it on `localhost` with no cross-container wiring.
 

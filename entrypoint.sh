@@ -65,10 +65,16 @@ if [ -n "$PG_BIN" ] && [ ! -s "$PGDATA/PG_VERSION" ]; then
     chown -R ubuntu:ubuntu "$PGDATA"
 fi
 
-# /var/run/postgresql is created by postgresql-common owned by the 'postgres'
-# user. The server runs as ubuntu, so it can't write the unix-socket lock
-# there. Re-own it before supervisord starts postgres.
-mkdir -p /var/run/postgresql
-chown -R ubuntu:ubuntu /var/run/postgresql
+# /var/run/postgresql is created by the postgresql-common package owned by
+# the 'postgres' user, and the runtime mounts don't let root chown/chmod
+# it. The server still runs as ubuntu, so it can't write the unix-socket
+# lock there. Pin the socket directory inside PGDATA instead — set it via
+# postgresql.auto.conf so it survives every restart.
+if [ -s "$PGDATA/PG_VERSION" ]; then
+    cat > "$PGDATA/postgresql.auto.conf" <<EOF
+unix_socket_directories = '$PGDATA'
+EOF
+    chown ubuntu:ubuntu "$PGDATA/postgresql.auto.conf"
+fi
 
 exec sudo -E /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf
