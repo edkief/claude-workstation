@@ -65,4 +65,10 @@ if [ -n "$PG_BIN" ] && [ ! -s "$PGDATA/PG_VERSION" ]; then
     chown -R ubuntu:ubuntu "$PGDATA"
 fi
 
+# /var/run/postgresql is created by postgresql-common owned by the 'postgres'
+# user. The server runs as ubuntu, so it can't write the unix-socket lock
+# there. Re-own it before supervisord starts postgres.
+mkdir -p /var/run/postgresql
+chown -R ubuntu:ubuntu /var/run/postgresql
+
 exec sudo -E /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf
