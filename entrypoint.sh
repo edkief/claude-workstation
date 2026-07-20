@@ -62,6 +62,7 @@ if [ -n "$PG_BIN" ] && [ ! -s "$PGDATA/PG_VERSION" ]; then
         --auth-local=trust --auth-host=scram-sha-256 --pwfile=/tmp/pgpw \
         || echo "WARN: postgres initdb failed"
     rm -f /tmp/pgpw
+    chown -R ubuntu:ubuntu "$PGDATA"
 fi
 
 exec sudo -E /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf
