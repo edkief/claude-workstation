@@ -278,6 +278,28 @@
     box-shadow: 0 0 0 3px var(--accent-soft);
   }
   select option { background: var(--surface); color: var(--text); }
+  .combo { position: relative; }
+  .combo-list {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    max-height: 220px;
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow);
+    z-index: 20;
+  }
+  .combo-item {
+    padding: .5rem .7rem;
+    font-size: .875rem;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .combo-item:hover, .combo-item.active { background: var(--accent-soft); color: var(--accent); }
+  .combo-empty { padding: .5rem .7rem; font-size: .875rem; color: var(--text-muted); }
   .checkbox-row { flex-direction: row; align-items: center; gap: .55rem; cursor: pointer; font-weight: 400; color: var(--text); }
   input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; flex: none; }
   .mode-toggle {
@@ -455,9 +477,11 @@
         <!-- Repo selector: dropdown or manual -->
         <label id="label-dropdown">
           <span>Repository <button type="button" class="mode-toggle" id="toggle-mode">enter URL manually</button></span>
-          <select id="repo-select" name="repo-select">
-            <option value="">Loading repositories…</option>
-          </select>
+          <div class="combo" id="repo-combo">
+            <input type="text" id="repo-filter" autocomplete="off" placeholder="Loading repositories…">
+            <input type="hidden" id="repo-select-value">
+            <div class="combo-list" id="repo-list" hidden></div>
+          </div>
           <span class="repo-hint" id="repo-hint"></span>
         </label>
 
@@ -517,30 +541,75 @@ let manualMode = false;
 let branchManualMode = false;
 let reposCache = [];
 
-// --- Repo dropdown ---
+// --- Repo dropdown (filterable combobox) ---
+function debounce(fn, delay) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), delay); };
+}
+
+const repoFilterInput = document.getElementById('repo-filter');
+const repoListEl       = document.getElementById('repo-list');
+const repoValueInput   = document.getElementById('repo-select-value');
+
 async function loadRepos() {
   try {
     const res = await fetch('/api/repos');
     if (!res.ok) throw new Error();
     reposCache = await res.json();
-    const sel = document.getElementById('repo-select');
-    sel.innerHTML = '<option value="">— select a repository —</option>'
-      + reposCache.map(r =>
-          `<option value="${escHtml(r.sshUrl)}" data-branch="${escHtml(r.defaultBranch)}" data-fullname="${escHtml(r.fullName)}">`
-          + `${escHtml(r.fullName)}${r.private ? ' 🔒' : ''}`
-          + `</option>`
-        ).join('');
+    repoFilterInput.placeholder = 'Search repositories…';
     document.getElementById('repo-hint').textContent = `${reposCache.length} repos loaded`;
   } catch {
-    document.getElementById('repo-select').innerHTML = '<option value="">Failed to load — use manual mode</option>';
+    reposCache = [];
+    repoFilterInput.placeholder = 'Failed to load — use manual mode';
     document.getElementById('repo-hint').textContent = '';
   }
 }
 
-document.getElementById('repo-select').addEventListener('change', async function () {
-  const opt = this.options[this.selectedIndex];
-  const fullName = opt.dataset.fullname;
-  const defaultBranch = opt.dataset.branch;
+function renderRepoList(filter) {
+  const q = filter.trim().toLowerCase();
+  const filtered = q ? reposCache.filter(r => r.fullName.toLowerCase().includes(q)) : reposCache;
+
+  if (!filtered.length) {
+    repoListEl.innerHTML = '<div class="combo-empty">No matches</div>';
+  } else {
+    repoListEl.innerHTML = filtered.map(r =>
+      `<div class="combo-item" data-sshurl="${escHtml(r.sshUrl)}" data-branch="${escHtml(r.defaultBranch)}" data-fullname="${escHtml(r.fullName)}">`
+      + `${escHtml(r.fullName)}${r.private ? ' 🔒' : ''}`
+      + `</div>`
+    ).join('');
+  }
+  repoListEl.hidden = false;
+}
+
+const debouncedRenderRepoList = debounce(renderRepoList, 200);
+
+repoFilterInput.addEventListener('input', () => {
+  repoValueInput.value = '';
+  debouncedRenderRepoList(repoFilterInput.value);
+});
+repoFilterInput.addEventListener('focus', () => renderRepoList(repoFilterInput.value));
+
+repoListEl.addEventListener('click', (e) => {
+  const item = e.target.closest('.combo-item');
+  if (!item || !item.dataset.sshurl) return;
+  selectRepo(item.dataset.sshurl, item.dataset.fullname, item.dataset.branch);
+});
+
+document.addEventListener('click', (e) => {
+  if (!document.getElementById('repo-combo').contains(e.target)) repoListEl.hidden = true;
+});
+repoFilterInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') repoListEl.hidden = true;
+});
+
+function selectRepo(sshUrl, fullName, defaultBranch) {
+  repoFilterInput.value = fullName;
+  repoValueInput.value = sshUrl;
+  repoListEl.hidden = true;
+  loadBranchesForRepo(fullName, defaultBranch);
+}
+
+async function loadBranchesForRepo(fullName, defaultBranch) {
   const sel = document.getElementById('branch-select');
 
   if (!fullName) {
@@ -568,7 +637,7 @@ document.getElementById('repo-select').addEventListener('change', async function
   } finally {
     sel.disabled = false;
   }
-});
+}
 
 function setBranchManualMode(manual) {
   branchManualMode = manual;
@@ -785,7 +854,7 @@ document.getElementById('start-form').addEventListener('submit', async (e) => {
 
   const project = manualMode
     ? document.getElementById('project-manual').value.trim()
-    : document.getElementById('repo-select').value;
+    : document.getElementById('repo-select-value').value;
 
   if (!project) {
     errEl.textContent = manualMode ? 'Please enter a Git URL.' : 'Please select a repository.';
