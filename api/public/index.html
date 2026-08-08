@@ -590,6 +590,10 @@ repoFilterInput.addEventListener('input', () => {
 repoFilterInput.addEventListener('focus', () => renderRepoList(repoFilterInput.value));
 
 repoListEl.addEventListener('click', (e) => {
+  // .combo-list lives inside <label id="label-dropdown">, whose first labelable
+  // descendant is the "toggle-mode" button — without this, clicks anywhere in
+  // the list (not just items) get forwarded by the browser to that button.
+  e.preventDefault();
   const item = e.target.closest('.combo-item');
   if (!item || !item.dataset.sshurl) return;
   selectRepo(item.dataset.sshurl, item.dataset.fullname, item.dataset.branch);
