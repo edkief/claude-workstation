@@ -38,7 +38,7 @@ function repoNameFromUrl(url) {
 }
 
 function timestamp() {
-    return new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
+    return new Date().toISOString().replace(/[-:.Z]/g, '').replace(/T/g, '-').slice(0, 15);
 }
 
 function buildProcessTree() {
