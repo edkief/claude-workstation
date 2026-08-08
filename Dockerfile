@@ -2,11 +2,16 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV NVM_DIR=/home/ubuntu/.nvm
+ENV RUSTUP_HOME=/home/ubuntu/.rustup
+ENV CARGO_HOME=/home/ubuntu/.cargo
+ENV PATH="/home/ubuntu/.cargo/bin:${PATH}"
 
 RUN apt-get update && apt-get install -y \
     curl htop \
     git \
     build-essential \
+    pkg-config \
+    libssl-dev \
     ca-certificates \
     sudo \
     vim \
@@ -49,6 +54,11 @@ RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.5/install.sh | b
     && nvm use default \
     && npm install -g pnpm @anthropic-ai/claude-code
 
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
+    && . "$CARGO_HOME/env" \
+    && rustup target add wasm32-unknown-unknown \
+    && cargo install wasm-pack
+
 # Symlink nvm-managed binaries into /usr/local/bin so supervisord (no .bashrc) can find them
 USER root
 RUN . "$NVM_DIR/nvm.sh" \
@@ -56,6 +66,10 @@ RUN . "$NVM_DIR/nvm.sh" \
     && ln -s "$(which npm)"  /usr/local/bin/npm \
     && ln -s "$(which npx)"  /usr/local/bin/npx \
     && ln -s "$(which pnpm)" /usr/local/bin/pnpm
+RUN ln -s /home/ubuntu/.cargo/bin/cargo     /usr/local/bin/cargo \
+    && ln -s /home/ubuntu/.cargo/bin/rustc  /usr/local/bin/rustc \
+    && ln -s /home/ubuntu/.cargo/bin/rustup /usr/local/bin/rustup \
+    && ln -s /home/ubuntu/.cargo/bin/wasm-pack /usr/local/bin/wasm-pack
 
 # Playwright: the CLI/library (as ubuntu) plus the MCP server so Claude can drive
 # a browser for testing, and the Chromium browser + its OS deps installed to a
