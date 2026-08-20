@@ -15,6 +15,23 @@ if [ ! -f "$STATE_FILE" ]; then
     echo '[]' > "$STATE_FILE"
 fi
 
+# .claude.json used to be its own PVC bind mount, which caused inode drift on
+# rewrite. Store it inside the already-mounted .claude-config subPath instead
+# and symlink it into place; migrate any pre-existing real file on first boot.
+CLAUDE_CONFIG_FILE="/home/ubuntu/.claude.json"
+CLAUDE_CONFIG_TARGET="/home/ubuntu/.claude/claude.json"
+if [ ! -e "$CLAUDE_CONFIG_TARGET" ]; then
+    if [ -f "$CLAUDE_CONFIG_FILE" ] && [ ! -L "$CLAUDE_CONFIG_FILE" ]; then
+        mv "$CLAUDE_CONFIG_FILE" "$CLAUDE_CONFIG_TARGET"
+    else
+        echo '{}' > "$CLAUDE_CONFIG_TARGET"
+    fi
+fi
+if [ ! -L "$CLAUDE_CONFIG_FILE" ]; then
+    rm -f "$CLAUDE_CONFIG_FILE"
+    ln -s "$CLAUDE_CONFIG_TARGET" "$CLAUDE_CONFIG_FILE"
+fi
+
 
 # Read PAT from secret and export so sudo -E carries it into supervisord
 SSH_SECRET_DIR="/run/secrets/github-ssh"

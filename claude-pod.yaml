@@ -56,9 +56,6 @@ spec:
           mountPath: /home/ubuntu/.claude
           subPath: .claude-config
         - name: workspace-data
-          mountPath: /home/ubuntu/.claude.json
-          subPath: .claude.json
-        - name: workspace-data
           mountPath: /home/ubuntu/.claude-sessions
           subPath: .claude-sessions
         - name: github-ssh
