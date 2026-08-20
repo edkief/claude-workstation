@@ -13,6 +13,7 @@ const STATE_FILE = process.env.STATE_FILE || '/home/ubuntu/.claude-sessions/stat
 const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || '/home/ubuntu/workspace';
 const SESSIONS_ROOT = path.join(WORKSPACE_ROOT, 'sessions');
 const GITHUB_USER = process.env.GITHUB_USER || 'edkief';
+const CLAUDE_CONFIG = process.env.CLAUDE_CONFIG || '/home/ubuntu/.claude.json';
 
 function readState() {
     try {
@@ -26,6 +27,38 @@ function writeState(sessions) {
     const tmp = STATE_FILE + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(sessions, null, 2));
     fs.renameSync(tmp, STATE_FILE);
+}
+
+// Claude Code no longer inherits folder trust from a parent directory, so every freshly
+// cloned session dir needs its own trusted entry in ~/.claude.json before `claude remote` runs,
+// otherwise the session blocks on the interactive trust dialog.
+function trustProject(projectPath) {
+    let config;
+    try {
+        config = JSON.parse(fs.readFileSync(CLAUDE_CONFIG, 'utf8'));
+    } catch {
+        config = {};
+    }
+    if (!config.projects || typeof config.projects !== 'object') config.projects = {};
+
+    const existing = config.projects[projectPath] || {};
+    config.projects[projectPath] = {
+        allowedTools: [],
+        mcpContextUris: [],
+        mcpServers: {},
+        enabledMcpjsonServers: [],
+        disabledMcpjsonServers: [],
+        projectOnboardingSeenCount: 0,
+        hasClaudeMdExternalIncludesApproved: false,
+        hasClaudeMdExternalIncludesWarningShown: false,
+        ...existing,
+        hasTrustDialogAccepted: true,
+        remoteControlSpawnMode: 'same-dir',
+    };
+
+    const tmp = CLAUDE_CONFIG + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(config, null, 2));
+    fs.renameSync(tmp, CLAUDE_CONFIG);
 }
 
 function sessionAlive(byobuSession) {
@@ -210,6 +243,12 @@ app.post('/api/sessions', (req, res) => {
                 return res.status(500).json({ error: 'git checkout -b failed', detail: err.message });
             }
         }
+    }
+
+    try {
+        trustProject(workspacePath);
+    } catch (err) {
+        return res.status(500).json({ error: 'failed to trust project folder', detail: err.message });
     }
 
     const byobuSession = `claude-${sessionName}`;
