@@ -19,7 +19,7 @@ fi
 # rewrite. Store it inside the already-mounted .claude-config subPath instead
 # and symlink it into place; migrate any pre-existing real file on first boot.
 CLAUDE_CONFIG_FILE="/home/ubuntu/.claude.json"
-CLAUDE_CONFIG_TARGET="/home/ubuntu/.claude/claude.json"
+CLAUDE_CONFIG_TARGET="/home/ubuntu/workspace/.claude.json"
 if [ ! -e "$CLAUDE_CONFIG_TARGET" ]; then
     if [ -f "$CLAUDE_CONFIG_FILE" ] && [ ! -L "$CLAUDE_CONFIG_FILE" ]; then
         mv "$CLAUDE_CONFIG_FILE" "$CLAUDE_CONFIG_TARGET"
