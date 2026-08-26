@@ -62,6 +62,10 @@ function tmuxSessionExists() {
     }
 }
 
+// The launch command itself never ran: a missing binary, or a claude too old
+// for `remote` / `--spawn`. Deliberately does NOT match a generic `Error:`.
+const LAUNCH_FAILURE_RE = /command not found|unknown (?:option|command)|error: unknown/i;
+
 function capturePane() {
     return sh('tmux', ['capture-pane', '-t', TMUX_SESSION, '-p']) || '';
 }
@@ -164,8 +168,15 @@ function health() {
 
     // Pre-ready only: the pane is still the bootstrap/launch transcript here,
     // so it is a usable failure signal and a usable progress message.
+    //
+    // The pattern must stay narrow. A bare /Error:/ matches any line claude
+    // prints while starting (an MCP server that failed to attach, a warning
+    // from a plugin), and a pre-ready 'failed' is terminal -- nothing clears
+    // it, so a healthy pod that logged one scary line is stuck forever. Only
+    // match the launch command never running at all, which self-heal cannot
+    // fix either.
     const pane = capturePane();
-    if (/command not found|Error:/.test(pane)) {
+    if (LAUNCH_FAILURE_RE.test(pane)) {
         return { ready: false, stage: 'failed', detail: tail(pane) };
     }
     return { ready: false, stage: 'starting', detail: tail(pane) };
