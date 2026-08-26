@@ -4,6 +4,7 @@
 #   ./docker-push.sh                 both images
 #   ./docker-push.sh dashboard       one
 #   ./docker-push.sh --rollout       both, then restart the dashboard
+#   ./docker-push.sh --latest        both, tagged :latest whatever the branch
 #
 # CI builds come from .k8s-build.yaml (Tekton); this script is for local and
 # out-of-band builds. Both produce <registry>/<repo>/<name> and both tag
@@ -13,6 +14,11 @@
 # script never pushed :latest at all while the manifests pinned it, so
 # `kubectl apply` deployed whatever :latest happened to be rather than the
 # build that had just run.
+#
+# --latest overrides that guard, for the case it gets in the way: iterating on a
+# workspace image against a live cluster whose manifests pin :latest. It means
+# every workspace created afterwards runs an unreviewed build off your branch,
+# so it stays opt-in and prints what it is doing.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,11 +32,13 @@ DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
 
 TARGETS=()
 ROLLOUT=false
+FORCE_LATEST=false
 for arg in "$@"; do
     case "$arg" in
         --rollout) ROLLOUT=true ;;
+        --latest) FORCE_LATEST=true ;;
         dashboard|workspace) TARGETS+=("$arg") ;;
-        *) echo "usage: $0 [dashboard|workspace] [--rollout]" >&2; exit 2 ;;
+        *) echo "usage: $0 [dashboard|workspace] [--rollout] [--latest]" >&2; exit 2 ;;
     esac
 done
 [ ${#TARGETS[@]} -eq 0 ] && TARGETS=(dashboard workspace)
@@ -46,9 +54,13 @@ TAG_BRANCH="${GIT_BRANCH//\//-}-${GIT_HASH}"
 TAG_LATEST=false
 if [ "$GIT_BRANCH" = "$DEFAULT_BRANCH" ] && [ "$CLEAN" = true ]; then
     TAG_LATEST=true
+elif [ "$FORCE_LATEST" = true ]; then
+    TAG_LATEST=true
+    echo "warning: --latest forces :latest from branch=${GIT_BRANCH}, clean=${CLEAN}"
+    echo "         every workspace created after this runs that build"
 else
     echo "note: not tagging :latest (branch=${GIT_BRANCH}, clean=${CLEAN})"
-    echo "      pin the manifest to ${TAG_BRANCH} to deploy this build"
+    echo "      pin the manifest to ${TAG_BRANCH} to deploy this build, or pass --latest"
 fi
 
 for target in "${TARGETS[@]}"; do
@@ -57,14 +69,16 @@ for target in "${TARGETS[@]}"; do
     echo "==> building ${IMAGE}"
 
     args=(-t "${IMAGE}:${TAG_HASH}" -t "${IMAGE}:${TAG_BRANCH}")
-    [ "$TAG_LATEST" = true ] && args+=(-t "${IMAGE}:latest")
+    if [ "$TAG_LATEST" = true ]; then args+=(-t "${IMAGE}:latest"); fi
 
     # Context is the repo root so both images can COPY shared/claude-config-sync.
     docker build -f "${ROOT}/${target}/Dockerfile" "${args[@]}" "$ROOT"
 
     docker push "${IMAGE}:${TAG_HASH}"
     docker push "${IMAGE}:${TAG_BRANCH}"
-    [ "$TAG_LATEST" = true ] && docker push "${IMAGE}:latest"
+    # An `if`, not `[ ... ] && ...`: under `set -e` a false AND-list at the end
+    # of the loop body is a failing command and kills the script.
+    if [ "$TAG_LATEST" = true ]; then docker push "${IMAGE}:latest"; fi
 done
 
 if [ "$ROLLOUT" = true ]; then

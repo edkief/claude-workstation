@@ -303,6 +303,7 @@ NAMESPACE=dev node server.js              # runs against your kubeconfig
 
 ./docker-push.sh                          # both images (local/out-of-band)
 ./docker-push.sh dashboard --rollout      # one, then restart the dashboard
+./docker-push.sh workspace --latest       # force :latest off a dirty branch
 kubectl apply -f k8s/dashboard.yaml -f k8s/networkpolicy.yaml -f k8s/cleanup-cronjob.yaml
 ```
 
