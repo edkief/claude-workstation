@@ -1,4 +1,6 @@
 node_modules/
+.env
+.env.local
 *.log
 .playwright-mcp/
 k8s/secrets.yaml

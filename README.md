@@ -120,6 +120,8 @@ default branch. Override with `REGISTRY=...` / `REPO_NAME=...`.
 | `WORKSPACE_STORAGE_CLASS` | `truenas-iscsi-ssd` | dashboard env |
 | `WORKSPACE_IMAGE` | `registry.kieffer.me/claude-workstation/workspace:latest` | dashboard env |
 | `REPO_NAME` | `claude-workstation` | `docker-push.sh` (must match the repo name) |
+| `K8S_NAMESPACE` | `dev` | `docker-push.sh --rollout` target |
+| `DEFAULT_BRANCH` | `main` | branch that may tag `:latest` |
 | `MAX_WORKSPACES` | `4` | dashboard env |
 
 ### 4. Deploy
@@ -228,6 +230,17 @@ cd dashboard
 npm install
 npm test                        # pure-function tests, no cluster
 NAMESPACE=dev node server.js    # runs against your kubeconfig
+```
+
+Every setting is documented in `dashboard/.env.example` (and
+`workspace/.env.example` for the pod contract). Nothing loads them
+automatically — there is no `dotenv` dependency — but they work as a shell
+source, and tests assert they stay in step with the code:
+
+```bash
+cp dashboard/.env.example dashboard/.env     # .env is gitignored
+set -a; . ./dashboard/.env; set +a
+node dashboard/server.js
 ```
 
 Unlike the previous version (which needed tmux and a live byobu), the dashboard

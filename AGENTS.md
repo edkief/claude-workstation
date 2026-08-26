@@ -51,6 +51,8 @@ which is the reason this design replaced the previous single-pod one.
 | `workspace/bootstrap/clone.sh` | Clone/refresh into `/workspace/<branch-slug>` |
 | `shared/claude-config-sync/` | S3 sync CLI, copied into **both** images |
 | `k8s/dashboard.yaml` | SA, Role, RoleBinding, PVC, ResourceQuota, Deployment, Service, Ingress |
+| `dashboard/.env.example` | Every dashboard setting; a test asserts it matches `lib/config.js` |
+| `workspace/.env.example` | The dashboard→pod env contract; a test asserts it matches `lib/podTemplate.js` |
 
 ## Session lifecycle
 
