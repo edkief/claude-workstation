@@ -128,3 +128,18 @@ test('the three mandatory S3 settings are enforced', () => {
     }
     process.env = saved;
 });
+
+// A bucket that says "no" and a bucket that is empty must never look alike:
+// conflating them made `pull` print "nothing to pull" and exit 0 on an auth
+// failure, and made `push` skip its version check and clobber the remote.
+test('only rclone not-found is treated as a missing object', () => {
+    assert.equal(sync.isMissing(3, 'directory not found'), true);
+    assert.equal(sync.isMissing(4, 'object not found'), true);
+    assert.equal(sync.isMissing(1, "Failed to cat: the object doesn't exist"), true);
+
+    assert.equal(sync.isMissing(1, 'SignatureDoesNotMatch: request signature mismatch'), false);
+    assert.equal(sync.isMissing(1, 'AccessDenied: forbidden'), false);
+    assert.equal(sync.isMissing(5, 'temporary error: connection refused'), false);
+    assert.equal(sync.isMissing(7, 'fatal error'), false);
+    assert.equal(sync.isMissing(null, 'spawn rclone ENOENT'), false);
+});

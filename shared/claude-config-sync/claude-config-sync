@@ -121,22 +121,38 @@ function rcloneConfigPath() {
     return configPath;
 }
 
-function rclone(args, { allowFail = false } = {}) {
-    let full;
-    try {
-        full = ['--config', rcloneConfigPath(), ...args];
-    } catch (err) {
-        if (allowFail) return null;
-        throw err;
-    }
+/**
+ * rclone exit codes: 3 = directory not found, 4 = file not found. Everything
+ * else is a real failure -- auth, signature (wrong S3_REGION), TLS, DNS, a
+ * missing bucket. `allowMissing` covers ONLY the first pair.
+ *
+ * These must never collapse into one value. When they did, an unreachable or
+ * forbidden bucket reported "no remote config found; nothing to pull" and
+ * exited 0, and a push then treated the remote as empty and clobbered it.
+ */
+const RCLONE_NOT_FOUND = new Set([3, 4]);
+const NOT_FOUND_TEXT = /(object|directory|file) not found|doesn't exist|does not exist/i;
+
+function isMissing(code, detail = '') {
+    return RCLONE_NOT_FOUND.has(code) || NOT_FOUND_TEXT.test(detail);
+}
+
+function rclone(args, { allowMissing = false } = {}) {
+    // A config we cannot even build (missing credentials) is never "missing
+    // data" -- always surface it.
+    const full = ['--config', rcloneConfigPath(), ...args];
     try {
         return execFileSync('rclone', full, {
             encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
         });
     } catch (err) {
-        if (allowFail) return null;
         const detail = (err.stderr || err.message || '').toString().trim();
-        throw new Error(`rclone ${args[0]} failed: ${detail}`);
+        const code = typeof err.status === 'number' ? err.status : null;
+        if (allowMissing && isMissing(code, detail)) return null;
+        const where = args[args.length - 1];
+        throw new Error(
+            `rclone ${args[0]} ${where} failed (exit ${code === null ? '?' : code}): `
+            + (detail || 'no output'));
     }
 }
 
@@ -160,10 +176,21 @@ function writeJsonAtomic(file, value, mode) {
     fs.renameSync(tmp, file);
 }
 
+/** null means the manifest is genuinely absent. Anything else throws. */
 function fetchRemoteManifest() {
-    const out = rclone(['cat', manifestPath()], { allowFail: true });
-    if (!out) return null;
-    try { return JSON.parse(out); } catch { return null; }
+    const out = rclone(['cat', manifestPath()], { allowMissing: true });
+    if (out === null) return null;
+    try {
+        return JSON.parse(out);
+    } catch (err) {
+        throw new Error(`${manifestPath()} is not valid JSON: ${err.message}`);
+    }
+}
+
+/** Objects under the data prefix, for telling "empty remote" from "no manifest". */
+function remoteEntryNames() {
+    const out = rclone(['lsf', `${REMOTE}:${BUCKET}/${PREFIX}`], { allowMissing: true });
+    return out === null ? [] : out.split('\n').map((l) => l.trim()).filter(Boolean);
 }
 
 function stripClaudeJson(doc) {
@@ -211,17 +238,35 @@ function assertMayPush(entries) {
 function pull() {
     const remote = fetchRemoteManifest();
     if (!remote) {
-        log('no remote config found; nothing to pull');
+        // The manifest lives at the bucket ROOT; the entries live under
+        // S3_PREFIX. Objects with no manifest is not an empty remote, it is a
+        // broken one -- and it is exactly what "nothing to pull" used to hide.
+        const orphans = remoteEntryNames();
+        if (orphans.length) {
+            throw new Error(
+                `${manifestPath()} is missing, but ${orphans.length} object(s) exist under `
+                + `${REMOTE}:${BUCKET}/${PREFIX}/ (${orphans.slice(0, 5).join(', ')}`
+                + `${orphans.length > 5 ? ', …' : ''}). The remote is incomplete: nothing can be `
+                + `pulled until a push (or k8s/seed-config-job.yaml) writes the manifest.`);
+        }
+        log(`no remote config found at ${manifestPath()}; nothing to pull`);
         return { pulled: [], version: 0 };
     }
 
     fs.mkdirSync(CLAUDE_DIR, { recursive: true });
     const pulled = [];
+    const missing = [];
 
     for (const entry of FILES) {
         if (!remote.entries?.[entry.remote]) continue;
-        const body = rclone(['cat', remotePath(entry.remote)], { allowFail: true });
-        if (body === null) continue;
+        const body = rclone(['cat', remotePath(entry.remote)], { allowMissing: true });
+        if (body === null) {
+            // Listed in the manifest but not on the bucket. Skipping silently
+            // would report a complete pull of a half-populated config.
+            missing.push(entry.remote);
+            log(`WARN: ${entry.remote} is in the manifest but missing from the bucket`);
+            continue;
+        }
 
         if (entry.merge === 'json') {
             // Never clobber: the pod's own project trust map must survive.
@@ -241,7 +286,11 @@ function pull() {
         const name = `${dir}.tar.gz`;
         if (!remote.entries?.[name]) continue;
         const tmp = path.join(os.tmpdir(), `${name}.${process.pid}`);
-        rclone(['copyto', remotePath(name), tmp]);
+        if (rclone(['copyto', remotePath(name), tmp], { allowMissing: true }) === null) {
+            missing.push(name);
+            log(`WARN: ${name} is in the manifest but missing from the bucket`);
+            continue;
+        }
         const target = path.join(CLAUDE_DIR, dir);
         fs.mkdirSync(target, { recursive: true });
         // Overlay rather than replace, so locally-installed extras survive.
@@ -250,18 +299,34 @@ function pull() {
         pulled.push(name);
     }
 
-    writeJsonAtomic(STATE_FILE, {
-        lastPullVersion: remote.version || 0,
-        lastPullAt: new Date().toISOString(),
-    });
+    // Only a complete pull advances the watermark. A partial one that recorded
+    // the remote version would make the next push look up-to-date and let it
+    // overwrite entries this pull never saw.
+    if (!missing.length) {
+        writeJsonAtomic(STATE_FILE, {
+            lastPullVersion: remote.version || 0,
+            lastPullAt: new Date().toISOString(),
+        });
+    }
 
     log(`pulled ${pulled.length} entr${pulled.length === 1 ? 'y' : 'ies'} (version ${remote.version || 0})`);
+    if (missing.length) {
+        const err = new Error(
+            `incomplete pull: ${missing.join(', ')} listed in the manifest but absent from `
+            + `${REMOTE}:${BUCKET}/${PREFIX}/ -- local version left at its previous value`);
+        err.exitCode = 1;
+        err.partial = { pulled, missing, version: remote.version || 0 };
+        throw err;
+    }
     return { pulled, version: remote.version || 0 };
 }
 
 // ---------------------------------------------------------------------- push
 
 function push({ force = false } = {}) {
+    // Throws if the remote is unreachable rather than returning null: a null
+    // here skips the version check below, so a transient auth or network error
+    // would silently downgrade the compare-and-swap into a blind overwrite.
     const remote = fetchRemoteManifest();
     const state = readJson(STATE_FILE, {});
     const remoteVersion = remote?.version || 0;
@@ -337,7 +402,19 @@ function push({ force = false } = {}) {
 // -------------------------------------------------------------------- status
 
 function status() {
-    const remote = fetchRemoteManifest();
+    // The one command that must never fail on an unreachable remote -- it is
+    // what you run to find out *why* it is unreachable.
+    let remote = null;
+    let remoteError = null;
+    let orphans = [];
+    if (isConfigured()) {
+        try {
+            remote = fetchRemoteManifest();
+            if (!remote) orphans = remoteEntryNames();
+        } catch (err) {
+            remoteError = err.message;
+        }
+    }
     const state = readJson(STATE_FILE, {});
     const localChanges = [];
 
@@ -361,6 +438,10 @@ function status() {
         // Without this the caller cannot tell "no config pushed yet" from
         // "S3 was never configured" -- both otherwise look like version 0.
         configured: isConfigured(),
+        // Distinguishes "no config pushed yet" from "the bucket said no".
+        remoteError,
+        // Objects present with no manifest: the remote is incomplete.
+        orphanEntries: orphans,
         remoteVersion: remote?.version || 0,
         localVersion: state.lastPullVersion || 0,
         lastPullAt: state.lastPullAt || null,
@@ -407,6 +488,11 @@ function main() {
             console.log(`last pull      : ${result.lastPullAt || 'never'}`);
             console.log(`push policy    : ${result.pushPolicy}`);
             if (!result.configured) console.log('S3             : not configured');
+            if (result.remoteError) console.log(`remote error   : ${result.remoteError}`);
+            if (result.orphanEntries?.length) {
+                console.log(`orphan objects : ${result.orphanEntries.join(', ')}`
+                    + '  (data present, manifest.json missing)');
+            }
             console.log(`local changes  : ${result.localChanges.length ? result.localChanges.join(', ') : 'none'}`);
         }
     } catch (err) {
@@ -419,6 +505,6 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
-    stripClaudeJson, mergeClaudeJson, isConfigured, rcloneConfigBody,
+    stripClaudeJson, mergeClaudeJson, isConfigured, rcloneConfigBody, isMissing,
     STRIP_KEYS, STRIP_PATTERNS, ADDITIVE,
 };

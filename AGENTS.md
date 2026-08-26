@@ -170,6 +170,22 @@ claude-config-sync status   # local vs remote divergence
 Exit codes: `0` ok, `1` error, `3` stale (remote moved since your last pull),
 `4` forbidden by `CONFIG_PUSH_POLICY`.
 
+**Missing is not the same as failed.** rclone exits 3/4 for "not found";
+everything else (SigV4 mismatch from a wrong `S3_REGION`, `AccessDenied`, TLS,
+DNS, no such bucket) is a real error and must surface. Collapsing the two made
+`pull` print *no remote config found; nothing to pull* and exit **0** on an auth
+failure, and made `push` skip its version check — a null manifest reads as an
+empty remote — and clobber whatever was there. Three rules follow:
+
+- `manifest.json` lives at the bucket **root**, entries under `S3_PREFIX`.
+  Objects under the prefix with no manifest is a broken remote, not an empty
+  one: `pull` says so and exits 1 instead of reporting nothing to do.
+- An entry listed in the manifest but absent from the bucket warns, and the pull
+  **does not advance** `lastPullVersion` — otherwise the next `push` looks
+  up-to-date and overwrites entries it never saw.
+- `status` never throws on an unreachable remote: it prints `remote error` (and
+  `orphan objects`). It is the command you run to find out why.
+
 ### S3 (Garage, not AWS)
 
 Transport is rclone, configured from env into a 0600 config file — not
