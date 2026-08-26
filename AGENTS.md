@@ -128,6 +128,33 @@ claude-config-sync push     # after editing in the config shell
 claude-config-sync status   # local vs remote divergence
 ```
 
+Exit codes: `0` ok, `1` error, `3` stale (remote moved since your last pull),
+`4` forbidden by `CONFIG_PUSH_POLICY`.
+
+### S3 (Garage, not AWS)
+
+Transport is rclone, configured from env into a 0600 config file — not
+`RCLONE_CONFIG_<NAME>_*` env vars (remote-name casing is ambiguous) and not an
+inline connection string (which would put the secret key in `ps` output).
+
+| Variable | Required | Default | Notes |
+|---|---|---|---|
+| `S3_ENDPOINT` | yes | — | Garage S3 API endpoint |
+| `S3_ACCESS_KEY_ID` | yes | — | |
+| `S3_SECRET_ACCESS_KEY` | yes | — | |
+| `S3_BUCKET` | no | `claude-config` | |
+| `S3_REGION` | no | `garage` | **Must match Garage's `s3_region`** — it is part of the SigV4 credential scope, so a mismatch fails as a signature error |
+| `S3_PROVIDER` | no | `Other` | rclone has **no** `Garage` provider value; `Other` is correct |
+| `S3_FORCE_PATH_STYLE` | no | `true` | Garage serves `endpoint/bucket/key`, not `bucket.endpoint/key` |
+| `S3_PREFIX` | no | `config` | |
+| `CLAUDE_JSON_PATH` | no | `$HOME/.claude.json` | Override; used by the seed Job |
+
+Verified against a live S3-compatible server: path-style addressing
+(`GET /claude-config?...` with the bucket in the path), SigV4 scope picking up
+`S3_REGION`, a full push→pull round-trip, the staleness refusal, and the
+push-policy gate. Note rclone with `provider = Other` issues **ListObjects v1**,
+which Garage supports.
+
 The **config shell** runs inside the dashboard pod (`/config-tty/`, a localhost
 hop, so it opens instantly) with its own 1 Gi PVC as the working copy. S3 is the
 distribution artifact.

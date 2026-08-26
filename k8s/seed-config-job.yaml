@@ -1,0 +1,104 @@
+---
+# One-shot: seed S3 with the Claude config from the pre-split deployment.
+#
+# Run this BEFORE cutting over, or every new workspace starts unauthenticated
+# and needs an interactive `claude login`.
+#
+# The legacy image has neither rclone nor claude-config-sync, so `kubectl exec`
+# into the old pod cannot do this. Instead we run the *new* dashboard image
+# (which has both) against the *old* volume.
+#
+#   # 1. Release the RWO volume -- the old pod must not hold it.
+#   kubectl scale deploy/claude-workstation -n dev --replicas=0
+#   kubectl wait --for=delete pod -l app=claude-workstation -n dev --timeout=120s
+#
+#   # 2. Seed.
+#   kubectl apply -f k8s/seed-config-job.yaml
+#   kubectl logs -n dev job/claude-seed-config -f
+#
+#   # 3. Clean up.
+#   kubectl delete -f k8s/seed-config-job.yaml
+#
+# The legacy volume is mounted READ-ONLY and the config is copied to an
+# emptyDir before pushing, so nothing on it is modified -- this stays safe to
+# re-run, and safe to abandon if you roll back.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: claude-seed-config
+  namespace: dev
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: seed
+          image: registry.kieffer.me/claude-workstation/dashboard:latest
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: claude-config-s3-rw
+          env:
+            # Bypass the policy gate: this is the authoritative first push.
+            - name: CONFIG_PUSH_POLICY
+              value: "any"
+          command: ["/bin/bash", "-euo", "pipefail", "-c"]
+          args:
+            - |
+              STAGE=/work
+              mkdir -p "$STAGE/.claude"
+
+              # Copy only the portable set. The legacy ~/.claude is ~80 MB,
+              # almost all of it transcripts we deliberately never sync.
+              for f in settings.json .credentials.json CLAUDE.md; do
+                [ -f "/legacy/claude/$f" ] && cp -a "/legacy/claude/$f" "$STAGE/.claude/$f" || true
+              done
+              for d in skills plugins agents commands; do
+                [ -d "/legacy/claude/$d" ] && cp -a "/legacy/claude/$d" "$STAGE/.claude/" || true
+              done
+
+              # The legacy entrypoint symlinked ~/.claude.json to the PVC root.
+              if [ -f /legacy/root/.claude.json ]; then
+                cp -a /legacy/root/.claude.json "$STAGE/.claude.json"
+              else
+                echo '{}' > "$STAGE/.claude.json"
+              fi
+
+              echo "--- staged for upload ---"
+              find "$STAGE" -maxdepth 2 | sort
+              echo "-------------------------"
+
+              export HOME="$STAGE"
+              export CLAUDE_CONFIG_DIR="$STAGE/.claude"
+              export CLAUDE_JSON_PATH="$STAGE/.claude.json"
+
+              # First push into an empty bucket: nothing to be stale against.
+              claude-config-sync push --force
+              echo
+              claude-config-sync status
+          volumeMounts:
+            - name: legacy
+              mountPath: /legacy/claude
+              subPath: .claude-config
+              readOnly: true
+            - name: legacy
+              mountPath: /legacy/root
+              readOnly: true
+            - name: work
+              mountPath: /work
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits:   { cpu: "500m", memory: "512Mi" }
+      volumes:
+        - name: legacy
+          persistentVolumeClaim:
+            claimName: claude-workspace-pvc
+            readOnly: true
+        - name: work
+          emptyDir: {}

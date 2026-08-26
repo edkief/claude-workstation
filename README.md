@@ -140,13 +140,30 @@ kubectl auth can-i create pods -n dev \
 
 ### 5. Seed the shared Claude config
 
-Open `/config-tty/` from the dashboard, run `claude` and log in, then:
+Migrating from the single-pod version? Use `k8s/seed-config-job.yaml` instead —
+see *Migrating* below.
+
+Otherwise, open `/config-tty/` from the dashboard, run `claude` and log in, then:
 
 ```bash
 claude-config-sync push
 ```
 
 Every workspace created afterwards inherits that config on first boot.
+
+The bucket and keys need to exist in Garage first:
+
+```bash
+garage bucket create claude-config
+garage key create claude-config-rw
+garage key create claude-config-ro
+garage bucket allow --read --write claude-config --key claude-config-rw
+garage bucket allow --read        claude-config --key claude-config-ro
+```
+
+`S3_REGION` must match Garage's configured `s3_region` (default `garage` here):
+it is part of the SigV4 credential scope, so a mismatch surfaces as a signature
+error rather than an obvious misconfiguration.
 
 ## Using it
 
@@ -166,8 +183,27 @@ Every workspace created afterwards inherits that config on first boot.
 The old 20 Gi `claude-workspace-pvc` holds your existing checkouts and
 `~/.claude`. Nothing here deletes it.
 
-1. **Seed S3 from the running pod first** (see step 5), or new workspaces will
-   need a fresh `claude login`.
+1. **Seed S3 from the legacy volume first**, or new workspaces will start
+   unauthenticated and need an interactive `claude login`.
+
+   The legacy image has neither `rclone` nor `claude-config-sync`, so
+   `kubectl exec` into the old pod cannot do this. `k8s/seed-config-job.yaml`
+   runs the *new* dashboard image against the *old* volume instead — mounted
+   read-only, staged through an emptyDir, so nothing on it is modified and the
+   Job is safe to re-run:
+
+   ```bash
+   kubectl scale deploy/claude-workstation -n dev --replicas=0     # release the RWO volume
+   kubectl wait --for=delete pod -l app=claude-workstation -n dev --timeout=120s
+   kubectl apply -f k8s/seed-config-job.yaml
+   kubectl logs -n dev job/claude-seed-config -f
+   kubectl delete -f k8s/seed-config-job.yaml
+   ```
+
+   It copies only the portable set (settings, credentials, skills, plugins,
+   agents, commands, and a stripped `.claude.json`) — not the ~71 MB of
+   transcripts.
+
 2. Inventory uncommitted work — the new topology does not read those
    directories:
    ```bash

@@ -24,7 +24,8 @@ const { execFileSync } = require('child_process');
 
 const HOME = process.env.HOME || os.homedir();
 const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(HOME, '.claude');
-const CLAUDE_JSON = path.join(HOME, '.claude.json');
+// Overridable so the seed Job can point at a legacy volume's config.
+const CLAUDE_JSON = process.env.CLAUDE_JSON_PATH || path.join(HOME, '.claude.json');
 const STATE_FILE = path.join(CLAUDE_DIR, '.config-sync-state.json');
 
 const BUCKET = process.env.S3_BUCKET || 'claude-config';
@@ -74,31 +75,68 @@ function isConfigured() {
         && process.env.S3_SECRET_ACCESS_KEY);
 }
 
-function rcloneEnv() {
+/**
+ * Build the rclone remote definition.
+ *
+ * Written to a 0600 file rather than passed as RCLONE_CONFIG_<NAME>_* env vars
+ * (whose remote-name casing is ambiguous) or as an inline connection string
+ * (which would put the secret key in argv, visible to any `ps`).
+ *
+ * Defaults target S3-compatible servers, not AWS:
+ *   provider          Other       -- generic; works with Garage, MinIO, Ceph
+ *   force_path_style  true        -- Garage serves bucket/key paths, not
+ *                                    bucket-as-subdomain virtual hosts
+ *   region            garage      -- must match Garage's configured s3_region,
+ *                                    or SigV4 signature validation fails
+ */
+function rcloneConfigBody() {
     const endpoint = process.env.S3_ENDPOINT;
     const key = process.env.S3_ACCESS_KEY_ID;
     const secret = process.env.S3_SECRET_ACCESS_KEY;
     if (!endpoint || !key || !secret) {
         throw new Error('S3_ENDPOINT, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be set');
     }
-    return {
-        ...process.env,
-        [`RCLONE_CONFIG_${REMOTE.toUpperCase()}_TYPE`]: 's3',
-        [`RCLONE_CONFIG_${REMOTE.toUpperCase()}_PROVIDER`]: process.env.S3_PROVIDER || 'Other',
-        [`RCLONE_CONFIG_${REMOTE.toUpperCase()}_ENDPOINT`]: endpoint,
-        [`RCLONE_CONFIG_${REMOTE.toUpperCase()}_ACCESS_KEY_ID`]: key,
-        [`RCLONE_CONFIG_${REMOTE.toUpperCase()}_SECRET_ACCESS_KEY`]: secret,
-        [`RCLONE_CONFIG_${REMOTE.toUpperCase()}_REGION`]: process.env.S3_REGION || 'us-east-1',
-        [`RCLONE_CONFIG_${REMOTE.toUpperCase()}_FORCE_PATH_STYLE`]: 'true',
-    };
+    return [
+        `[${REMOTE}]`,
+        'type = s3',
+        `provider = ${process.env.S3_PROVIDER || 'Other'}`,
+        `endpoint = ${endpoint}`,
+        `access_key_id = ${key}`,
+        `secret_access_key = ${secret}`,
+        `region = ${process.env.S3_REGION || 'garage'}`,
+        `location_constraint = ${process.env.S3_REGION || 'garage'}`,
+        `force_path_style = ${process.env.S3_FORCE_PATH_STYLE || 'true'}`,
+        'env_auth = false',
+        '',
+    ].join('\n');
+}
+
+let configPath = null;
+
+function rcloneConfigPath() {
+    if (configPath) return configPath;
+    configPath = path.join(os.tmpdir(), `rclone-claude-config.${process.pid}.conf`);
+    fs.writeFileSync(configPath, rcloneConfigBody(), { mode: 0o600 });
+    process.on('exit', () => { try { fs.unlinkSync(configPath); } catch { /* gone */ } });
+    return configPath;
 }
 
 function rclone(args, { allowFail = false } = {}) {
+    let full;
     try {
-        return execFileSync('rclone', args, { env: rcloneEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        full = ['--config', rcloneConfigPath(), ...args];
     } catch (err) {
         if (allowFail) return null;
-        throw new Error(`rclone ${args[0]} failed: ${(err.stderr || err.message).toString().trim()}`);
+        throw err;
+    }
+    try {
+        return execFileSync('rclone', full, {
+            encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+        });
+    } catch (err) {
+        if (allowFail) return null;
+        const detail = (err.stderr || err.message || '').toString().trim();
+        throw new Error(`rclone ${args[0]} failed: ${detail}`);
     }
 }
 
@@ -381,5 +419,6 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
-    stripClaudeJson, mergeClaudeJson, isConfigured, STRIP_KEYS, STRIP_PATTERNS, ADDITIVE,
+    stripClaudeJson, mergeClaudeJson, isConfigured, rcloneConfigBody,
+    STRIP_KEYS, STRIP_PATTERNS, ADDITIVE,
 };

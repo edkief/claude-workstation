@@ -69,3 +69,62 @@ test('a strip/merge round-trip is stable and keeps the local trust map', () => {
 test('additive push policy covers exactly the extension directories', () => {
     assert.deepEqual([...sync.ADDITIVE].sort(), ['agents', 'commands', 'skills']);
 });
+
+test('rclone config targets S3-compatible servers, not AWS', () => {
+    const saved = { ...process.env };
+    Object.assign(process.env, {
+        S3_ENDPOINT: 'https://garage.kieffer.me',
+        S3_ACCESS_KEY_ID: 'GK123',
+        S3_SECRET_ACCESS_KEY: 'shh',
+    });
+    delete process.env.S3_REGION;
+    delete process.env.S3_PROVIDER;
+    delete process.env.S3_FORCE_PATH_STYLE;
+
+    const cfg = sync.rcloneConfigBody();
+    assert.match(cfg, /^\[cfg\]$/m);
+    assert.match(cfg, /^type = s3$/m);
+    assert.match(cfg, /^endpoint = https:\/\/garage\.kieffer\.me$/m);
+    assert.match(cfg, /^access_key_id = GK123$/m);
+    assert.match(cfg, /^secret_access_key = shh$/m);
+    // Garage serves endpoint/bucket/key, not bucket.endpoint/key.
+    assert.match(cfg, /^force_path_style = true$/m);
+    // rclone has no `Garage` provider value; `Other` is the generic one.
+    assert.match(cfg, /^provider = Other$/m);
+    // Region is part of the SigV4 credential scope and must match garage.toml.
+    assert.match(cfg, /^region = garage$/m);
+    assert.match(cfg, /^env_auth = false$/m);
+
+    process.env = saved;
+});
+
+test('every S3 setting is overridable', () => {
+    const saved = { ...process.env };
+    Object.assign(process.env, {
+        S3_ENDPOINT: 'http://minio:9000',
+        S3_ACCESS_KEY_ID: 'k',
+        S3_SECRET_ACCESS_KEY: 's',
+        S3_REGION: 'eu-central',
+        S3_PROVIDER: 'Minio',
+        S3_FORCE_PATH_STYLE: 'false',
+    });
+    const cfg = sync.rcloneConfigBody();
+    assert.match(cfg, /^region = eu-central$/m);
+    assert.match(cfg, /^location_constraint = eu-central$/m);
+    assert.match(cfg, /^provider = Minio$/m);
+    assert.match(cfg, /^force_path_style = false$/m);
+    process.env = saved;
+});
+
+test('the three mandatory S3 settings are enforced', () => {
+    const saved = { ...process.env };
+    for (const missing of ['S3_ENDPOINT', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY']) {
+        Object.assign(process.env, {
+            S3_ENDPOINT: 'http://x', S3_ACCESS_KEY_ID: 'k', S3_SECRET_ACCESS_KEY: 's',
+        });
+        delete process.env[missing];
+        assert.equal(sync.isConfigured(), false, `${missing} should be required`);
+        assert.throws(() => sync.rcloneConfigBody(), /must be set/, missing);
+    }
+    process.env = saved;
+});
