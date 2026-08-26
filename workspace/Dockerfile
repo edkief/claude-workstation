@@ -1,6 +1,11 @@
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+# Kubelet/CRI does not derive HOME from the image's USER the way `docker run`
+# does, so without this the entrypoint (and the tmux server it starts, and
+# therefore claude) can run with HOME unset. supervisord pins HOME for its
+# own children; nothing pinned it for the bootstrap.
+ENV HOME=/home/ubuntu
 ENV NVM_DIR=/home/ubuntu/.nvm
 ENV RUSTUP_HOME=/home/ubuntu/.rustup
 ENV CARGO_HOME=/home/ubuntu/.cargo

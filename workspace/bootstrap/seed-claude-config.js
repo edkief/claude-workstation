@@ -48,8 +48,15 @@ config.projects[dir] = {
     remoteControlSpawnMode: 'same-dir',
 };
 
-const tmp = `${CONFIG}.tmp-${process.pid}`;
+// ~/.claude.json is a symlink onto the PVC (entrypoint.sh), and rename(2)
+// replaces the *link*, not its target -- writing atomically to CONFIG would
+// leave a plain file on the container layer, so this trust entry and every
+// later token refresh would vanish on the next pod start. Resolve the link
+// first, and keep the temp file beside the real target so the rename stays on
+// one filesystem.
+const target = fs.realpathSync(CONFIG);
+const tmp = `${target}.tmp-${process.pid}`;
 fs.writeFileSync(tmp, JSON.stringify(config, null, 2));
-fs.renameSync(tmp, CONFIG);
+fs.renameSync(tmp, target);
 
 console.log(`[seed] trusted ${dir}`);

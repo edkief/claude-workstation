@@ -21,6 +21,9 @@ export BRANCH_SLUG="${BRANCH_SLUG:-$(echo "$BRANCH" | tr -c 'a-zA-Z0-9-' '-')}"
 export CLAUDE_SESSION_NAME="${CLAUDE_SESSION_NAME:-$WORKSPACE_ID}"
 export TTY_BASE_PATH="${TTY_BASE_PATH:-/tty/$WORKSPACE_ID}"
 export GITHUB_TOKEN="${GITHUB_TOKEN:-}"
+# Everything below (and the tmux server, and claude inside it) resolves
+# ~/.claude from HOME; CRI does not set it from the image user.
+export HOME="${HOME:-/home/ubuntu}"
 
 fail() {
     echo "$1" > "$STATE_DIR/error"
@@ -50,18 +53,18 @@ export GH_TOKEN="${GITHUB_TOKEN:-}"
 export NVM_DIR="/home/ubuntu/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
-# ----------------------------------------------------- claude config from S3
-# The PVC's ~/.claude is per-repo, so a brand-new repo starts with an empty
-# config. Pull the shared, curated config (auth, settings, skills, plugins)
-# before anything tries to run claude.
-stage syncing-config
-if [ -n "${S3_ENDPOINT:-}" ]; then
-    claude-config-sync pull || echo "[entrypoint] WARN: config pull failed, continuing"
-else
-    echo "[entrypoint] S3_ENDPOINT unset; skipping config sync"
-fi
-
+# --------------------------------------------------------- ~/.claude.json link
 # ~/.claude.json must live on the PVC so a token refresh survives a restart.
+#
+# This MUST run before the config pull. ~/.claude.json is on the container
+# layer, so it is a plain file (or absent) on every container start and never
+# already a symlink -- meaning the `rm -f` below would delete whatever the pull
+# had just written and relink to the PVC copy. That silently threw away the
+# pulled auth on every start after the first: claude then read a `{}` written
+# back when pull was failing, and reported "not logged in". Linking first makes
+# the pull write *through* the symlink onto the PVC, which is also what the
+# merge wants -- the local side it merges the remote over is the PVC copy,
+# carrying the `projects` trust entries forward.
 CLAUDE_CONFIG_FILE="/home/ubuntu/.claude.json"
 CLAUDE_CONFIG_TARGET="/workspace/_home/claude.json"
 mkdir -p /workspace/_home
@@ -75,6 +78,24 @@ fi
 if [ ! -L "$CLAUDE_CONFIG_FILE" ]; then
     rm -f "$CLAUDE_CONFIG_FILE"
     ln -s "$CLAUDE_CONFIG_TARGET" "$CLAUDE_CONFIG_FILE"
+fi
+
+# ----------------------------------------------------- claude config from S3
+# The PVC's ~/.claude is per-repo, so a brand-new repo starts with an empty
+# config. Pull the shared, curated config (auth, settings, skills, plugins)
+# before anything tries to run claude.
+stage syncing-config
+if [ -n "${S3_ENDPOINT:-}" ]; then
+    claude-config-sync pull || echo "[entrypoint] WARN: config pull failed, continuing"
+else
+    echo "[entrypoint] S3_ENDPOINT unset; skipping config sync"
+fi
+
+# The pull is the only thing that can supply credentials, so an empty config
+# here means claude will start at a login prompt. Say so in the log rather than
+# leaving it to be discovered inside the terminal.
+if [ ! -s /home/ubuntu/.claude/.credentials.json ]; then
+    echo "[entrypoint] WARN: no ~/.claude/.credentials.json after sync; claude will not be logged in"
 fi
 
 # ----------------------------------------------------------------- the repo
