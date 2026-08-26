@@ -71,11 +71,48 @@ which is the reason this design replaced the previous single-pod one.
 5. Inside the pod, `entrypoint.sh` runs to completion *before* supervisord, so
    the readiness probe reports not-ready for the whole bootstrap and each phase
    is visible in the UI as text (`syncing Claude config…`, `cloning repository…`).
-6. Readiness is the agent's `/healthz`, not the old `tmux capture-pane` scrape.
+6. Readiness is the agent's `/healthz`: bootstrap done **and** the bootstrap
+   `claude remote --name $CLAUDE_SESSION_NAME` present in `/proc`. Never a
+   `tmux capture-pane` match — the pane is a scrolling transcript, so any banner
+   it looks for leaves the viewport and the pod flaps to not-ready while claude
+   is fine. Matching on the session name, not on "any claude", keeps a user's
+   own second `claude` from holding the pod ready.
+7. Nothing supervises claude: `entrypoint.sh` types it into the tmux pane, and
+   supervisord runs only ttyd, the agent and Postgres. So the agent self-heals —
+   see below.
 
 `POST /api/sessions/:id/activate` **no longer exists**, and must not come back:
 terminals are per-session URLs now, not a global singleton with a 10-second
 race window.
+
+### Health, self-heal and restart
+
+`/healthz` (readiness) and `/livez` (liveness) answer different questions, and
+the split is the point:
+
+| | fails when | consequence |
+|---|---|---|
+| `/healthz` | bootstrap unfinished, or the named `claude remote` is gone | UI shows the stage; **nothing restarts** |
+| `/livez` | pod was ready once, claude is gone, and in-pane relaunch is exhausted | kubelet restarts the container |
+
+Readiness gates only the UI here (a workspace Pod backs no Service), so a
+readiness failure alone is *forever*: a pod once sat 503 for 8 h and 10 421
+Unhealthy events without ever restarting. Liveness is the only lever, so it must
+carry real meaning — never `{ok:true}` for "the agent process is alive".
+
+The ladder, after `$WORKSPACE_STATE_DIR/ready` exists:
+
+1. `/healthz` → 503, stage `session-lost` (surfaced as *Claude session lost;
+   relaunching…*).
+2. The agent retypes the launch command into the pane, `WORKSPACE_RELAUNCH_MAX`
+   times (default 3), one per `WORKSPACE_RELAUNCH_BACKOFF_MS` (default 30 s).
+   Cheap: pod, PVC, checkout and tmux session all survive.
+3. Still gone → `/livez` 503 → container restart → `entrypoint.sh` reruns.
+   `ready` lives on the container layer, so readiness is re-proved from scratch.
+
+`/livez` never fails while `ready` is absent, so a slow clone is never shot, and
+a claude that has *never* started stays 503 for a human rather than looping the
+bootstrap. `WORKSPACE_SELF_HEAL=0` disables steps 2 and 3.
 
 ## Storage
 

@@ -129,6 +129,12 @@ function buildWorkspacePodManifest({
                     periodSeconds: 3,
                     failureThreshold: 60,
                 },
+                // /livez is not "is the agent up" -- that is always yes. It
+                // reports whether the workspace is salvageable in place: it
+                // fails only after the pod was ready, claude died, and in-pane
+                // relaunch was exhausted. Readiness gates nothing but the UI
+                // here, so this is the only thing that can restart a wedged
+                // workspace.
                 livenessProbe: {
                     httpGet: { path: '/livez', port: 7682 },
                     initialDelaySeconds: 120,

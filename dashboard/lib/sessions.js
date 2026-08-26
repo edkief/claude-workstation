@@ -132,6 +132,9 @@ function stageLabel(stage) {
         'syncing-config': 'syncing Claude config…',
         cloning: 'cloning repository…',
         starting: 'starting Claude…',
+        // The agent reports this when claude died after the pod was ready; it
+        // relaunches in the pane, then fails /livez so the kubelet restarts.
+        'session-lost': 'Claude session lost; relaunching…',
         failed: 'workspace bootstrap failed',
     }[stage] || stage;
 }
