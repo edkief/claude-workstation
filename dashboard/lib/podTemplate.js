@@ -59,6 +59,10 @@ function buildWorkspacePodManifest({
             },
         },
         spec: {
+            // The pod name is the storage identity (repo + hash), which is what
+            // the shell prompt and any hostname-derived UI would otherwise show.
+            // Name the host after the session instead: "my-repo-main".
+            hostname: slug(sessionName, 63),
             // OOMKill restarts the container in place: same pod IP (so the tty
             // proxy target cache stays valid), PVC stays attached, checkout
             // survives. That is the whole point of a bare Pod here.
