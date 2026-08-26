@@ -1,0 +1,140 @@
+#!/usr/bin/env node
+'use strict';
+
+/**
+ * Tiny in-pod agent. Zero dependencies, binds 0.0.0.0:7682.
+ *
+ * This exists so the dashboard never needs `pods/exec` RBAC -- exec is a root
+ * shell into every workspace, held by an internet-facing service. A ~100 line
+ * HTTP endpoint behind a NetworkPolicy gets the same data.
+ *
+ *   GET /livez    process is up
+ *   GET /healthz  readiness: bootstrap finished AND claude is connected
+ *   GET /disk     df of the workspace volume
+ *   GET /session  what this pod is working on
+ */
+
+const http = require('http');
+const fs = require('fs');
+const { execFileSync } = require('child_process');
+
+const PORT = Number(process.env.AGENT_PORT || 7682);
+// Bootstrap state lives in a uid-1000-owned dir on the container layer:
+// /run is root-owned, and this must not land on the PVC.
+const STATE_DIR = process.env.WORKSPACE_STATE_DIR || '/home/ubuntu/.workspace-state';
+const STAGE_FILE = `${STATE_DIR}/stage`;
+const DIR_FILE = `${STATE_DIR}/dir`;
+const ERROR_FILE = `${STATE_DIR}/error`;
+const TMUX_SESSION = 'claude';
+
+function readFile(file) {
+    try { return fs.readFileSync(file, 'utf8').trim(); } catch { return null; }
+}
+
+function sh(cmd, args) {
+    try {
+        return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch {
+        return null;
+    }
+}
+
+function tmuxSessionExists() {
+    try {
+        execFileSync('tmux', ['has-session', '-t', TMUX_SESSION], { stdio: 'ignore' });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function capturePane() {
+    return sh('tmux', ['capture-pane', '-t', TMUX_SESSION, '-p']) || '';
+}
+
+/**
+ * Readiness. The bootstrap writes a stage marker; once it reports `starting`,
+ * we additionally require claude to have announced itself in the pane. This is
+ * the same signal the old API scraped, but evaluated in-pod on a 3s probe
+ * rather than in a 30s blocking HTTP handler in the control plane.
+ */
+function health() {
+    const stage = readFile(STAGE_FILE) || 'starting';
+
+    if (stage === 'failed') {
+        return { ready: false, stage: 'failed', detail: tail(readFile(ERROR_FILE) || '') };
+    }
+    if (stage !== 'starting') {
+        return { ready: false, stage, detail: null };
+    }
+    if (!tmuxSessionExists()) {
+        return { ready: false, stage: 'starting', detail: 'tmux session not created yet' };
+    }
+
+    const pane = capturePane();
+    if (/\b(Connected|Ready)\b/.test(pane)) {
+        return { ready: true, stage: 'ready', detail: null };
+    }
+    if (/command not found|Error:/.test(pane)) {
+        return { ready: false, stage: 'failed', detail: tail(pane) };
+    }
+    return { ready: false, stage: 'starting', detail: tail(pane) };
+}
+
+function tail(text, lines = 8) {
+    return text.split('\n').filter(Boolean).slice(-lines).join('\n') || null;
+}
+
+function disk() {
+    const out = sh('df', ['-B1', '--output=size,used,avail', '/workspace']);
+    if (!out) return null;
+    const row = out.trim().split('\n').pop().trim().split(/\s+/);
+    if (row.length < 3) return null;
+    return {
+        capacityBytes: Number(row[0]),
+        usedBytes: Number(row[1]),
+        availBytes: Number(row[2]),
+    };
+}
+
+function session() {
+    return {
+        workspaceId: process.env.WORKSPACE_ID || null,
+        workspaceDir: readFile(DIR_FILE),
+        branch: process.env.BRANCH || null,
+        sessionName: process.env.CLAUDE_SESSION_NAME || null,
+        stage: readFile(STAGE_FILE) || 'starting',
+        claudeConnected: health().ready,
+    };
+}
+
+function send(res, status, body) {
+    const payload = JSON.stringify(body);
+    res.writeHead(status, {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(payload),
+    });
+    res.end(payload);
+}
+
+http.createServer((req, res) => {
+    const path = (req.url || '').split('?')[0];
+
+    if (path === '/livez') return send(res, 200, { ok: true });
+
+    if (path === '/healthz') {
+        const h = health();
+        return send(res, h.ready ? 200 : 503, h);
+    }
+
+    if (path === '/disk') {
+        const d = disk();
+        return d ? send(res, 200, d) : send(res, 503, { error: 'df failed' });
+    }
+
+    if (path === '/session') return send(res, 200, session());
+
+    send(res, 404, { error: 'not found' });
+}).listen(PORT, '0.0.0.0', () => {
+    console.log(`[agent] listening on ${PORT}`);
+});

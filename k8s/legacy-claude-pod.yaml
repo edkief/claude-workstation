@@ -1,3 +1,14 @@
+# LEGACY -- the pre-split single-pod deployment. Kept only for rollback
+# during the soak period; delete once the new topology is proven.
+#
+# WARNING: this file defines an Ingress named `claude-workstation` that
+# collides with the one in k8s/dashboard.yaml. Never apply both. To roll
+# back: kubectl apply -f k8s/legacy-claude-pod.yaml && kubectl scale
+# deploy/claude-dashboard -n dev --replicas=0
+#
+# Its PVC (claude-workspace-pvc, 20Gi) holds the pre-split checkouts and
+# ~/.claude. Nothing in the new topology reads or deletes it.
+
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

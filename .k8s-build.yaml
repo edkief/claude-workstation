@@ -1,0 +1,33 @@
+version: 1
+
+defaults:
+  # Both images COPY shared/claude-config-sync/, so neither can use its own
+  # subdirectory as the build context -- it has to be the repo root. The
+  # Dockerfiles therefore reference sources as dashboard/... and workspace/...,
+  # and .dockerignore keeps the context small.
+  context: .
+  tags:
+    # Only tag :latest from main. git-<sha> and <branch>-<sha> are always
+    # applied, so feature branches still produce pullable, pinnable images.
+    latest: main
+
+builds:
+  # -> registry.kieffer.me/claude-workstation/dashboard
+  # Control plane + UI. Slim: node, express, the k8s client, plus claude/ttyd/
+  # rclone for the shared-config shell.
+  - name: dashboard
+    dockerfile: dashboard/Dockerfile
+    paths:
+      - dashboard/**
+      - shared/**
+      - .dockerignore
+
+  # -> registry.kieffer.me/claude-workstation/workspace
+  # The dev environment. Fat: Claude Code, byobu/ttyd, Postgres, Playwright +
+  # Chromium, JDK/Gradle, Rust.
+  - name: workspace
+    dockerfile: workspace/Dockerfile
+    paths:
+      - workspace/**
+      - shared/**
+      - .dockerignore

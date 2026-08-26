@@ -1,0 +1,385 @@
+#!/usr/bin/env node
+'use strict';
+
+/**
+ * Sync a curated subset of the Claude Code config between this machine and S3.
+ *
+ * ~/.claude is ~80 MB, almost all of it per-machine runtime state (transcripts,
+ * caches, shell snapshots). Only the portable identity/settings/extensions are
+ * synced -- see ALLOWLIST below.
+ *
+ *   claude-config-sync pull     fetch + merge  (workspace entrypoint, dashboard boot)
+ *   claude-config-sync push     strip + upload
+ *   claude-config-sync status   local vs remote divergence
+ *
+ * Exit codes: 0 ok, 1 error, 2 usage, 3 stale (remote moved since your last pull),
+ * 4 push forbidden by CONFIG_PUSH_POLICY.
+ */
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const crypto = require('crypto');
+const { execFileSync } = require('child_process');
+
+const HOME = process.env.HOME || os.homedir();
+const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(HOME, '.claude');
+const CLAUDE_JSON = path.join(HOME, '.claude.json');
+const STATE_FILE = path.join(CLAUDE_DIR, '.config-sync-state.json');
+
+const BUCKET = process.env.S3_BUCKET || 'claude-config';
+const PREFIX = process.env.S3_PREFIX || 'config';
+const REMOTE = 'cfg';
+
+/** Single files copied verbatim. */
+const FILES = [
+    { local: CLAUDE_JSON, remote: 'claude.json', merge: 'json' },
+    { local: path.join(CLAUDE_DIR, 'settings.json'), remote: 'settings.json' },
+    { local: path.join(CLAUDE_DIR, '.credentials.json'), remote: 'credentials.json', mode: 0o600 },
+    { local: path.join(CLAUDE_DIR, 'CLAUDE.md'), remote: 'CLAUDE.md' },
+];
+
+/** Directories shipped as tarballs. */
+const DIRS = ['skills', 'plugins', 'agents', 'commands'];
+
+/** Additive-only paths, for CONFIG_PUSH_POLICY=additive. */
+const ADDITIVE = new Set(['skills', 'agents', 'commands']);
+
+/**
+ * .claude.json keys that are specific to one machine or are pure cache. These
+ * are stripped on push so a workspace never inherits another pod's identity,
+ * project trust map, or stale feature-flag cache.
+ */
+const STRIP_KEYS = [
+    'projects', 'machineID', 'remoteControlMachineId', 'userID', 'numStartups',
+    'firstStartTime', 'sessions', 'history', 'githubRepoPaths', 'seenNotifications',
+    'promptQueueUseCount', 'claudeCodeFirstTokenDate', 'skillUsage',
+    'tipLifetimeShownCounts', 'replBridgePlaceholders', 'remoteControlSurfacesSeen',
+    'hasUsedRemoteControl', 'migrationVersion',
+];
+const STRIP_PATTERNS = [
+    /^cached/i, /Cache$/, /Count$/, /Watermark$/,
+    /Last(Checked|Fetched|Seen|Used)$/, /^last[A-Z]/,
+    /Impressions$/, /^announcement/, /^has(Seen|Visited)/,
+];
+
+function log(...args) { if (!jsonMode) console.error(...args); }
+
+let jsonMode = false;
+
+// --------------------------------------------------------------------- rclone
+
+function isConfigured() {
+    return !!(process.env.S3_ENDPOINT && process.env.S3_ACCESS_KEY_ID
+        && process.env.S3_SECRET_ACCESS_KEY);
+}
+
+function rcloneEnv() {
+    const endpoint = process.env.S3_ENDPOINT;
+    const key = process.env.S3_ACCESS_KEY_ID;
+    const secret = process.env.S3_SECRET_ACCESS_KEY;
+    if (!endpoint || !key || !secret) {
+        throw new Error('S3_ENDPOINT, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be set');
+    }
+    return {
+        ...process.env,
+        [`RCLONE_CONFIG_${REMOTE.toUpperCase()}_TYPE`]: 's3',
+        [`RCLONE_CONFIG_${REMOTE.toUpperCase()}_PROVIDER`]: process.env.S3_PROVIDER || 'Other',
+        [`RCLONE_CONFIG_${REMOTE.toUpperCase()}_ENDPOINT`]: endpoint,
+        [`RCLONE_CONFIG_${REMOTE.toUpperCase()}_ACCESS_KEY_ID`]: key,
+        [`RCLONE_CONFIG_${REMOTE.toUpperCase()}_SECRET_ACCESS_KEY`]: secret,
+        [`RCLONE_CONFIG_${REMOTE.toUpperCase()}_REGION`]: process.env.S3_REGION || 'us-east-1',
+        [`RCLONE_CONFIG_${REMOTE.toUpperCase()}_FORCE_PATH_STYLE`]: 'true',
+    };
+}
+
+function rclone(args, { allowFail = false } = {}) {
+    try {
+        return execFileSync('rclone', args, { env: rcloneEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (err) {
+        if (allowFail) return null;
+        throw new Error(`rclone ${args[0]} failed: ${(err.stderr || err.message).toString().trim()}`);
+    }
+}
+
+const remotePath = (name) => `${REMOTE}:${BUCKET}/${PREFIX}/${name}`;
+const manifestPath = () => `${REMOTE}:${BUCKET}/manifest.json`;
+
+// ------------------------------------------------------------------- helpers
+
+function sha256File(file) {
+    return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+
+function readJson(file, fallback) {
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
+}
+
+function writeJsonAtomic(file, value, mode) {
+    const tmp = `${file}.tmp-${process.pid}`;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(tmp, JSON.stringify(value, null, 2), mode ? { mode } : undefined);
+    fs.renameSync(tmp, file);
+}
+
+function fetchRemoteManifest() {
+    const out = rclone(['cat', manifestPath()], { allowFail: true });
+    if (!out) return null;
+    try { return JSON.parse(out); } catch { return null; }
+}
+
+function stripClaudeJson(doc) {
+    const out = {};
+    for (const [k, v] of Object.entries(doc || {})) {
+        if (STRIP_KEYS.includes(k)) continue;
+        if (STRIP_PATTERNS.some((re) => re.test(k))) continue;
+        out[k] = v;
+    }
+    return out;
+}
+
+/** Remote wins for the keys it carries; everything local (incl. trust map) stays. */
+function mergeClaudeJson(local, remote) {
+    return { ...local, ...remote, projects: local.projects || {} };
+}
+
+function pushPolicy() { return process.env.CONFIG_PUSH_POLICY || 'any'; }
+
+function assertMayPush(entries) {
+    const policy = pushPolicy();
+    if (policy === 'any') return entries;
+    if (policy === 'dashboard') {
+        if (process.env.DASHBOARD_CONFIG_WRITER === 'true') return entries;
+        const err = new Error(
+            'CONFIG_PUSH_POLICY=dashboard: only the dashboard config shell may push');
+        err.exitCode = 4;
+        throw err;
+    }
+    if (policy === 'additive') {
+        const allowed = entries.filter((e) => ADDITIVE.has(e.name.replace(/\.tar\.gz$/, '')));
+        if (!allowed.length) {
+            const err = new Error(
+                'CONFIG_PUSH_POLICY=additive: only skills/, agents/ and commands/ may be pushed');
+            err.exitCode = 4;
+            throw err;
+        }
+        return allowed;
+    }
+    return entries;
+}
+
+// ---------------------------------------------------------------------- pull
+
+function pull() {
+    const remote = fetchRemoteManifest();
+    if (!remote) {
+        log('no remote config found; nothing to pull');
+        return { pulled: [], version: 0 };
+    }
+
+    fs.mkdirSync(CLAUDE_DIR, { recursive: true });
+    const pulled = [];
+
+    for (const entry of FILES) {
+        if (!remote.entries?.[entry.remote]) continue;
+        const body = rclone(['cat', remotePath(entry.remote)], { allowFail: true });
+        if (body === null) continue;
+
+        if (entry.merge === 'json') {
+            // Never clobber: the pod's own project trust map must survive.
+            const local = readJson(entry.local, {});
+            const incoming = JSON.parse(body);
+            writeJsonAtomic(entry.local, mergeClaudeJson(local, incoming));
+        } else {
+            const tmp = `${entry.local}.tmp-${process.pid}`;
+            fs.mkdirSync(path.dirname(entry.local), { recursive: true });
+            fs.writeFileSync(tmp, body, entry.mode ? { mode: entry.mode } : undefined);
+            fs.renameSync(tmp, entry.local);
+        }
+        pulled.push(entry.remote);
+    }
+
+    for (const dir of DIRS) {
+        const name = `${dir}.tar.gz`;
+        if (!remote.entries?.[name]) continue;
+        const tmp = path.join(os.tmpdir(), `${name}.${process.pid}`);
+        rclone(['copyto', remotePath(name), tmp]);
+        const target = path.join(CLAUDE_DIR, dir);
+        fs.mkdirSync(target, { recursive: true });
+        // Overlay rather than replace, so locally-installed extras survive.
+        execFileSync('tar', ['-xzf', tmp, '-C', target]);
+        fs.unlinkSync(tmp);
+        pulled.push(name);
+    }
+
+    writeJsonAtomic(STATE_FILE, {
+        lastPullVersion: remote.version || 0,
+        lastPullAt: new Date().toISOString(),
+    });
+
+    log(`pulled ${pulled.length} entr${pulled.length === 1 ? 'y' : 'ies'} (version ${remote.version || 0})`);
+    return { pulled, version: remote.version || 0 };
+}
+
+// ---------------------------------------------------------------------- push
+
+function push({ force = false } = {}) {
+    const remote = fetchRemoteManifest();
+    const state = readJson(STATE_FILE, {});
+    const remoteVersion = remote?.version || 0;
+    const seenVersion = state.lastPullVersion || 0;
+
+    // Optimistic concurrency: if the remote moved since our last pull, refuse
+    // rather than silently overwrite whoever got there first.
+    if (!force && remote && remoteVersion > seenVersion) {
+        const err = new Error(
+            `remote config changed since your last pull (remote v${remoteVersion} > ` +
+            `local v${seenVersion}) -- run 'claude-config-sync pull' first, or push --force`);
+        err.exitCode = 3;
+        throw err;
+    }
+
+    let entries = [];
+    const staged = [];
+
+    for (const entry of FILES) {
+        if (!fs.existsSync(entry.local)) continue;
+        let tmp;
+        if (entry.merge === 'json') {
+            tmp = path.join(os.tmpdir(), `claude.json.${process.pid}`);
+            fs.writeFileSync(tmp, JSON.stringify(stripClaudeJson(readJson(entry.local, {})), null, 2));
+        } else {
+            tmp = entry.local;
+        }
+        entries.push({ name: entry.remote, sha256: sha256File(tmp) });
+        staged.push({ name: entry.remote, file: tmp, temp: tmp !== entry.local });
+    }
+
+    for (const dir of DIRS) {
+        const src = path.join(CLAUDE_DIR, dir);
+        if (!fs.existsSync(src)) continue;
+        const tmp = path.join(os.tmpdir(), `${dir}.tar.gz.${process.pid}`);
+        execFileSync('tar', ['-czf', tmp, '-C', src, '.']);
+        entries.push({ name: `${dir}.tar.gz`, sha256: sha256File(tmp) });
+        staged.push({ name: `${dir}.tar.gz`, file: tmp, temp: true });
+    }
+
+    entries = assertMayPush(entries);
+    const allowedNames = new Set(entries.map((e) => e.name));
+
+    for (const item of staged) {
+        if (!allowedNames.has(item.name)) {
+            if (item.temp) fs.unlinkSync(item.file);
+            continue;
+        }
+        rclone(['copyto', item.file, remotePath(item.name)]);
+        if (item.temp) fs.unlinkSync(item.file);
+    }
+
+    const version = remoteVersion + 1;
+    const manifest = {
+        version,
+        updatedAt: new Date().toISOString(),
+        updatedBy: process.env.POD_NAME || os.hostname(),
+        entries: {
+            ...(remote?.entries || {}),
+            ...Object.fromEntries(entries.map((e) => [e.name, { sha256: e.sha256 }])),
+        },
+    };
+    const tmp = path.join(os.tmpdir(), `manifest.${process.pid}.json`);
+    fs.writeFileSync(tmp, JSON.stringify(manifest, null, 2));
+    rclone(['copyto', tmp, manifestPath()]);
+    fs.unlinkSync(tmp);
+
+    writeJsonAtomic(STATE_FILE, { lastPullVersion: version, lastPullAt: new Date().toISOString() });
+    log(`pushed ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} (version ${version})`);
+    return { pushed: entries.map((e) => e.name), version };
+}
+
+// -------------------------------------------------------------------- status
+
+function status() {
+    const remote = fetchRemoteManifest();
+    const state = readJson(STATE_FILE, {});
+    const localChanges = [];
+
+    for (const entry of FILES) {
+        if (!fs.existsSync(entry.local)) continue;
+        let file = entry.local;
+        let temp = false;
+        if (entry.merge === 'json') {
+            file = path.join(os.tmpdir(), `cmp.claude.json.${process.pid}`);
+            fs.writeFileSync(file, JSON.stringify(stripClaudeJson(readJson(entry.local, {})), null, 2));
+            temp = true;
+        }
+        const sha = sha256File(file);
+        if (temp) fs.unlinkSync(file);
+        if (remote?.entries?.[entry.remote]?.sha256 !== sha) localChanges.push(entry.remote);
+    }
+    // Directory tarballs are not byte-stable, so they are reported as unknown
+    // rather than falsely dirty.
+
+    return {
+        // Without this the caller cannot tell "no config pushed yet" from
+        // "S3 was never configured" -- both otherwise look like version 0.
+        configured: isConfigured(),
+        remoteVersion: remote?.version || 0,
+        localVersion: state.lastPullVersion || 0,
+        lastPullAt: state.lastPullAt || null,
+        updatedAt: remote?.updatedAt || null,
+        updatedBy: remote?.updatedBy || null,
+        behind: (remote?.version || 0) > (state.lastPullVersion || 0),
+        localChanges,
+        pushPolicy: pushPolicy(),
+    };
+}
+
+// ----------------------------------------------------------------------- cli
+
+function main() {
+    const argv = process.argv.slice(2);
+    const cmd = argv[0];
+    jsonMode = argv.includes('--json');
+    const force = argv.includes('--force');
+
+    if (!cmd || ['-h', '--help', 'help'].includes(cmd)) {
+        console.log('usage: claude-config-sync <pull|push|status> [--json] [--force]');
+        process.exit(cmd ? 0 : 2);
+    }
+
+    if (!isConfigured() && cmd !== 'status') {
+        const msg = 'S3 is not configured (set S3_ENDPOINT, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY)';
+        if (jsonMode) console.log(JSON.stringify({ error: msg }, null, 2));
+        else console.error(`error: ${msg}`);
+        process.exit(1);
+    }
+
+    try {
+        let result;
+        if (cmd === 'pull') result = pull();
+        else if (cmd === 'push') result = push({ force });
+        else if (cmd === 'status') result = status();
+        else { console.error(`unknown command: ${cmd}`); process.exit(2); }
+
+        if (jsonMode) console.log(JSON.stringify(result, null, 2));
+        else if (cmd === 'status') {
+            console.log(`remote version : ${result.remoteVersion}`);
+            console.log(`local  version : ${result.localVersion}` +
+                (result.behind ? '  (behind -- pull first)' : ''));
+            console.log(`last pull      : ${result.lastPullAt || 'never'}`);
+            console.log(`push policy    : ${result.pushPolicy}`);
+            if (!result.configured) console.log('S3             : not configured');
+            console.log(`local changes  : ${result.localChanges.length ? result.localChanges.join(', ') : 'none'}`);
+        }
+    } catch (err) {
+        if (jsonMode) console.log(JSON.stringify({ error: err.message }, null, 2));
+        else console.error(`error: ${err.message}`);
+        process.exit(err.exitCode || 1);
+    }
+}
+
+if (require.main === module) main();
+
+module.exports = {
+    stripClaudeJson, mergeClaudeJson, isConfigured, STRIP_KEYS, STRIP_PATTERNS, ADDITIVE,
+};

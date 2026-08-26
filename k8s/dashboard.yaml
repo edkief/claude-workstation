@@ -1,0 +1,242 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: claude-dashboard
+  namespace: dev
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: claude-dashboard
+  namespace: dev
+rules:
+  # Workspace pod lifecycle. `watch` is not used yet, but is pre-provisioned so
+  # swapping the TTL cache for an informer later needs no RBAC change.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+
+  # Surface bootstrap failures in the UI (GET /api/sessions/:id/logs).
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+
+  # Explains a stuck Pending: Unschedulable, FailedAttachVolume/Multi-Attach,
+  # ImagePullBackOff. Without this the user just sees a mute spinner.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]
+
+  # Per-repo PVCs: created on first use, kept when a session is terminated,
+  # patched to stamp last-seen-at/last-used-bytes, deleted only by the pruner.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+
+  # Per-pod CPU/memory. A namespaced Role is sufficient: metrics.k8s.io pods is
+  # a namespaced resource despite the cluster-scoped API group.
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+
+  # NOTE: pods/exec is deliberately absent. It is a root shell into every
+  # workspace, and an internet-facing service must not hold it. The in-pod
+  # agent (:7682) provides disk and health instead.
+  # NOTE: pods/status is not needed -- get/list on pods already returns .status.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: claude-dashboard
+  namespace: dev
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: claude-dashboard
+subjects:
+  - kind: ServiceAccount
+    name: claude-dashboard
+    namespace: dev
+---
+# The dashboard's own working copy of the Claude config, edited through the
+# config shell. Small: S3 is the distribution artifact, this is just the desk.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: claude-dashboard-config
+  namespace: dev
+spec:
+  storageClassName: truenas-iscsi-ssd
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+# Backstop for MAX_WORKSPACES: without a quota, a bug could schedule pods that
+# all sit Pending and pin storage.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: claude-workspaces
+  namespace: dev
+spec:
+  hard:
+    count/pods: "12"
+    requests.cpu: "6"
+    requests.memory: 12Gi
+    persistentvolumeclaims: "12"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claude-dashboard
+  namespace: dev
+spec:
+  # Single replica: the TTL and proxy-target caches are in-process, and a
+  # rolling update only costs a WebSocket reconnect (tmux state lives in the
+  # workspace pods). Do not casually raise this.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: claude-dashboard
+  template:
+    metadata:
+      labels:
+        app: claude-dashboard
+    spec:
+      serviceAccountName: claude-dashboard
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+      containers:
+        - name: dashboard
+          image: registry.kieffer.me/claude-workstation/dashboard:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # Pin to an immutable tag once the image settles: with :latest +
+            # Always, every workspace start can pay a multi-GB re-pull.
+            - name: WORKSPACE_IMAGE
+              value: "registry.kieffer.me/claude-workstation/workspace:latest"
+            - name: WORKSPACE_IMAGE_PULL_POLICY
+              value: "Always"
+            - name: WORKSPACE_STORAGE_CLASS
+              value: "truenas-iscsi-ssd"
+            - name: WORKSPACE_STORAGE_SIZE
+              value: "20Gi"
+            - name: WORKSPACE_CPU_REQUEST
+              value: "250m"
+            - name: WORKSPACE_MEM_REQUEST
+              value: "1Gi"
+            - name: WORKSPACE_CPU_LIMIT
+              value: "2"
+            - name: WORKSPACE_MEM_LIMIT
+              value: "4Gi"
+            - name: MAX_WORKSPACES
+              value: "4"
+            - name: CLAUDE_CODE_VERSION
+              value: "latest"
+            # any | dashboard | additive -- see AGENTS.md. Flipping this and
+            # restarting changes the S3 credentials handed to new workspaces.
+            - name: CONFIG_PUSH_POLICY
+              value: "any"
+            - name: GITHUB_USER
+              value: "edkief"
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: github-ssh-key
+                  key: github_token
+          envFrom:
+            - secretRef:
+                name: claude-config-s3-rw
+          volumeMounts:
+            - name: config
+              mountPath: /home/node/.claude
+              subPath: claude
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /api/info
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/info
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: claude-dashboard-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: claude-dashboard
+  namespace: dev
+spec:
+  selector:
+    app: claude-dashboard
+  ports:
+    - name: http
+      protocol: TCP
+      port: 3000
+      targetPort: http
+---
+# Same name, host, TLS secret and auth middleware as the old Ingress, so
+# cert-manager is a no-op at cutover and the auth boundary is unchanged.
+# Only the backend moves, and /tty is now proxied by the dashboard itself.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: claude-workstation
+  namespace: dev
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-production"
+    traefik.ingress.kubernetes.io/router.middlewares: authz-proxy-authz-reverse-proxy@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - claude-workstation.kieffer.me
+      secretName: claude-workstation-tls
+  rules:
+    - host: claude-workstation.kieffer.me
+      http:
+        paths:
+          - pathType: Prefix
+            path: /
+            backend:
+              service:
+                name: claude-dashboard
+                port:
+                  name: http

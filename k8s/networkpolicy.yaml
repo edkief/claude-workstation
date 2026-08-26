@@ -1,0 +1,25 @@
+---
+# Port 7681 is an unauthenticated root-capable shell and 7682 is the unauth'd
+# agent. With one pod per workspace the exposure multiplies, so only the
+# dashboard may reach them.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: claude-workspace-ingress
+  namespace: dev
+spec:
+  podSelector:
+    matchLabels:
+      app: claude-workspace
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: claude-dashboard
+      ports:
+        - protocol: TCP
+          port: 7681
+        - protocol: TCP
+          port: 7682

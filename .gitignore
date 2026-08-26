@@ -1,3 +1,6 @@
+node_modules/
+*.log
+.playwright-mcp/
+k8s/secrets.yaml
 github-credentials-secret.yaml
-api/node_modules/
 .claude/

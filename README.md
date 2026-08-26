@@ -1,188 +1,204 @@
 # claude-workstation
 
-A Kubernetes-deployed container that provides a browser-accessible Claude Code development environment plugged directly into Claude remote connect. It combines a web terminal ([ttyd](https://github.com/tsl0922/ttyd)) with a small Express API that manages Claude Code remote sessions inside byobu/tmux.
+Browser-accessible Claude Code development environments on Kubernetes, plugged
+directly into Claude remote connect.
+
+A small **dashboard** app lets you browse your GitHub repos, pick a branch, and
+launch a workspace. Each workspace is **its own Kubernetes pod** with a web
+terminal ([ttyd](https://github.com/tsl0922/ttyd)), a persistent per-repo volume,
+and a scratch Postgres. Once running, it is reachable as a Claude Code remote
+session, and the dashboard proxies a terminal straight into it.
 
 ## How it works
 
 ```
 Browser
-  ├── /              → ttyd (port 7681) — full bash terminal
-  ├── /api/*         → Express API (port 3000) — session management
-  └── /sessions/*    → Express API (port 3000) — session management
+  │  https://claude-workstation.example.com   (one host, one cert, one auth middleware)
+  ▼
+┌─────────────────────────────────────────┐
+│ claude-dashboard                        │
+│   /api/*        session + storage API   │──── Kubernetes API
+│   /tty/<id>/*   reverse proxy (HTTP+WS) │────┐
+│   /config-tty/  shared-config shell     │    │
+└─────────────────────────────────────────┘    ▼
+                        ┌──────────────────────────────────────┐
+                        │ claude-workspace pod (one per repo)  │
+                        │   ttyd → byobu → claude remote       │
+                        │   agent (health/disk), postgres      │
+                        │   /workspace ← per-repo PVC          │
+                        └──────────────────────────────────────┘
 ```
 
-Both services are managed by supervisord and started by `entrypoint.sh`. The web UI (served by the API) lets you browse your GitHub repos, pick a branch, and launch a Claude Code session — all from your browser. Once a session is running, it is accessible directly into Claude code as a remote session. A **Terminal** feature also allows the user to land inside that session's byobu window for troubleshooting.
+The dashboard creates Kubernetes objects rather than shelling out. One workspace
+can no longer exhaust the memory of every other one — the motivation for this
+design.
 
 ## Repository layout
 
 ```
 .
-├── Dockerfile                          # Ubuntu 24.04 image
-├── entrypoint.sh                       # Container startup script
-├── supervisord.conf                    # Process manager config
-├── docker-push.sh                      # Build-and-push helper
-├── claude-pod.yaml                     # Kubernetes manifests (Deployment, PVC, Service, Ingress)
-├── github-credentials-secret.example.yaml  # Template for the GitHub credentials Secret
-└── api/
-    ├── package.json
-    ├── server.js                       # Express REST API
-    └── public/
-        └── index.html                  # Single-page web UI
+├── dashboard/          # control plane + UI (slim image)
+│   ├── Dockerfile  server.js  prune-pvcs.js
+│   ├── lib/        k8s client, pod template, proxy, metrics, validation
+│   ├── public/     single-file UI, no build step
+│   └── test/       pure-function tests (no cluster required)
+├── workspace/          # the dev environment (fat image)
+│   ├── Dockerfile  entrypoint.sh  supervisord.conf  agent.js
+│   └── bootstrap/  clone.sh, seed-claude-config.js
+├── shared/claude-config-sync/   # S3 config sync CLI, used by both images
+├── k8s/                # manifests
+└── docker-push.sh
 ```
 
 ## Prerequisites
 
-- Docker
+- Docker, `kubectl`
 - A Kubernetes cluster with:
   - [Traefik](https://traefik.io/) ingress controller
   - [cert-manager](https://cert-manager.io/) with a `letsencrypt-production` ClusterIssuer
-  - An auth-proxy middleware (`authz-proxy-authz-reverse-proxy`) configured as a Traefik CRD
-  - A StorageClass named `truenas-iscsi-ssd` (or edit the PVC in `claude-pod.yaml` to match your environment)
-- A GitHub SSH key and Personal Access Token (PAT)
-
-> The Kubernetes-specific pieces (ingress class, storage class, auth middleware) are all customizable in `claude-pod.yaml`.
+  - An auth-proxy middleware configured as a Traefik CRD
+  - A `ReadWriteOnce` StorageClass (default here: `truenas-iscsi-ssd`)
+  - Optionally [metrics-server](https://github.com/kubernetes-sigs/metrics-server)
+    — the UI degrades gracefully without it
+- An S3-compatible bucket for the shared Claude config
+- A GitHub SSH key and Personal Access Token
 
 ## Installation
 
-### 1. Create the GitHub credentials secret
-
-Copy the example and fill in your base64-encoded values:
+### 1. Secrets
 
 ```bash
-cp github-credentials-secret.example.yaml github-credentials-secret.yaml
+cp k8s/secrets.example.yaml k8s/secrets.yaml   # gitignored
 ```
 
-Encode your key and token:
+Fill in the GitHub key/PAT and both sets of S3 credentials, then apply. Or
+create them directly:
 
 ```bash
-# Base64-encode your SSH private key
-base64 -w0 ~/.ssh/id_rsa
+kubectl create secret generic github-ssh-key -n dev \
+  --from-file=id_rsa=$HOME/.ssh/id_rsa \
+  --from-literal=github_token=ghp_yourtoken
 
-# Base64-encode your GitHub PAT
-echo -n 'ghp_yourtoken' | base64 -w0
+kubectl create secret generic claude-config-s3-rw -n dev \
+  --from-literal=S3_ENDPOINT=https://s3.example.com \
+  --from-literal=S3_BUCKET=claude-config \
+  --from-literal=S3_ACCESS_KEY_ID=... \
+  --from-literal=S3_SECRET_ACCESS_KEY=...
+# ...and claude-config-s3-ro with a read-only key.
 ```
 
-Paste both values into `github-credentials-secret.yaml`, then apply:
+Both S3 users are created up front so `CONFIG_PUSH_POLICY` can be changed later
+without new cluster objects.
+
+### 2. Build and push
+
+Pushing to a branch builds both images through the cluster's Tekton pipeline —
+see `.k8s-build.yaml`. For local or out-of-band builds:
 
 ```bash
-kubectl apply -f github-credentials-secret.yaml
+./docker-push.sh                       # both images
+./docker-push.sh dashboard             # just one
 ```
 
-`github-credentials-secret.yaml` is listed in `.gitignore` and must never be committed.
+Both paths produce the same references, following the cluster convention
+`<registry>/<repo>/<name>`:
 
-### 2. Build and push the image
+| Image | Reference |
+|---|---|
+| Dashboard | `registry.kieffer.me/claude-workstation/dashboard` |
+| Workspace | `registry.kieffer.me/claude-workstation/workspace` |
 
-```bash
-./docker-push.sh
-```
+Each is tagged `git-<sha>` and `<branch>-<sha>`; `latest` is added only from the
+default branch. Override with `REGISTRY=...` / `REPO_NAME=...`.
 
-By default the image is tagged `registry.kieffer.me/claude-workstation:latest`. Override with env vars:
+### 3. Adjust the manifests
 
-```bash
-IMAGE=my-registry.example.com/claude-workstation TAG=v1.0.0 ./docker-push.sh
-```
-
-### 3. Update `claude-pod.yaml` for your environment
-
-At minimum, replace these values in `claude-pod.yaml`:
-
-| Field | Default | Description |
+| Field | Default | Where |
 |---|---|---|
-| `spec.rules[].host` | `claude-workstation.kieffer.me` | Your public hostname |
-| `spec.tls[].hosts[]` | `claude-workstation.kieffer.me` | Same hostname for TLS cert |
-| `image` | `registry.kieffer.me/claude-workstation:latest` | Your registry/tag |
-| `storageClassName` | `truenas-iscsi-ssd` | Your StorageClass |
-| `traefik.ingress.kubernetes.io/router.middlewares` | `authz-proxy-authz-reverse-proxy@kubernetescrd` | Your auth middleware (or remove if not needed) |
+| Ingress host / TLS host | `claude-workstation.kieffer.me` | `k8s/dashboard.yaml` |
+| Auth middleware | `authz-proxy-authz-reverse-proxy@kubernetescrd` | `k8s/dashboard.yaml` |
+| `WORKSPACE_STORAGE_CLASS` | `truenas-iscsi-ssd` | dashboard env |
+| `WORKSPACE_IMAGE` | `registry.kieffer.me/claude-workstation/workspace:latest` | dashboard env |
+| `REPO_NAME` | `claude-workstation` | `docker-push.sh` (must match the repo name) |
+| `MAX_WORKSPACES` | `4` | dashboard env |
 
 ### 4. Deploy
 
 ```bash
-kubectl apply -f claude-pod.yaml
+kubectl apply -f k8s/dashboard.yaml \
+               -f k8s/networkpolicy.yaml \
+               -f k8s/cleanup-cronjob.yaml
 ```
 
-The Deployment uses `strategy: Recreate` — Kubernetes will terminate any existing pod before starting a new one, which is required because the PVC uses `ReadWriteOnce`.
+Verify RBAC before anything else — a missing Role is the most common first
+failure (the UI will tell you, but this is faster):
 
-### 5. Access the UI
+```bash
+kubectl auth can-i create pods -n dev \
+  --as=system:serviceaccount:dev:claude-dashboard
+```
 
-Navigate to your configured hostname (e.g. `https://claude-workstation.kieffer.me`). The web UI lets you:
+### 5. Seed the shared Claude config
 
-- Browse GitHub repos and branches
-- Launch new Claude Code sessions
-- Open a terminal attached to any running session
-- Terminate sessions
+Open `/config-tty/` from the dashboard, run `claude` and log in, then:
 
-## Session lifecycle
+```bash
+claude-config-sync push
+```
 
-1. Select a repo and branch in the web UI (or paste a Git SSH URL manually).
-2. `POST /api/sessions` clones the repo into `~/workspace/<session-name>`, creates a byobu session, and runs `claude remote --name <session-name> --spawn=same-dir` inside it.
-3. The API polls `tmux capture-pane` until it sees `Connected` or `Ready` (up to 30 s timeout).
-4. Session state is persisted to `~/.claude-sessions/state.json` (atomic write via temp file + rename).
-5. Clicking **Terminal** calls `POST /api/sessions/:name/activate`, writing `~/.claude-session` so the next bash login auto-attaches to the byobu session.
-6. Clicking **Terminate** calls `DELETE /api/sessions/:name`, which kills the tmux session and removes it from state.
+Every workspace created afterwards inherits that config on first boot.
 
-## Persistent storage
+## Using it
 
-The PVC (`claude-workspace-pvc`, 20 Gi, ReadWriteOnce) is mounted at multiple sub-paths so that workspace data, Claude Code config, and session state all survive pod restarts:
+- **Start a session** — pick a repo and branch, press *Start Session*. The card
+  shows `starting` with live progress, then `running`.
+- **Already running?** Storage is per repo and only one pod may hold it, so
+  starting a second session for the same repo returns a conflict and the UI
+  offers **Open terminal** or **Replace**.
+- **Terminate** stops the pod but **keeps the storage**, so the next session on
+  that repo starts warm. Storage is reclaimed by the nightly prune (30 days) or
+  explicitly from the *Workspace Storage* card.
+- **`degraded`** with a `restarted N× (OOMKilled)` chip means that workspace hit
+  its memory limit and restarted — on its own, without touching anything else.
 
-| Mount path | PVC sub-path |
-|---|---|
-| `/home/ubuntu/workspace` | (root) |
-| `/home/ubuntu/.claude` | `.claude-config` |
-| `/home/ubuntu/.claude.json` | `.claude.json` |
-| `/home/ubuntu/.claude-sessions` | `.claude-sessions` |
+## Migrating from the single-pod version
 
-> Deleting the PVC destroys all workspace data permanently.
+The old 20 Gi `claude-workspace-pvc` holds your existing checkouts and
+`~/.claude`. Nothing here deletes it.
 
-## API reference
+1. **Seed S3 from the running pod first** (see step 5), or new workspaces will
+   need a fresh `claude login`.
+2. Inventory uncommitted work — the new topology does not read those
+   directories:
+   ```bash
+   kubectl exec -n dev deploy/claude-workstation -- bash -lc \
+     'for d in ~/workspace/sessions/*/; do git -C "$d" status --porcelain | head -1 | sed "s|^|$d |"; done'
+   ```
+3. Build and push both images; apply the RBAC and verify it.
+4. `kubectl scale deploy/claude-workstation -n dev --replicas=0` — the cutover
+   point, instantly reversible, and required before the old PVC can be remounted.
+5. Apply `k8s/dashboard.yaml`. It reuses the Ingress name, host, TLS secret and
+   auth middleware, so cert-manager is a no-op and there is no DNS window.
+6. Smoke-test, then soak. Only after that, delete the old Deployment, Service and
+   PVC — manually, as a deliberate separate act.
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/info` | Returns `{ podName }` |
-| `GET` | `/api/repos` | Lists GitHub repos (authenticated: all; unauthenticated: public only) |
-| `GET` | `/api/branches?repo=owner/name` | Lists branches for a repo |
-| `GET` | `/api/sessions` | Lists sessions with live tmux status check |
-| `POST` | `/api/sessions` | Starts a new session (body: `{ project, branch, newBranch?, force? }`) |
-| `POST` | `/api/sessions/:name/activate` | Writes `~/.claude-session` for next-login auto-attach |
-| `DELETE` | `/api/sessions/:name` | Terminates a session |
-
-### POST /api/sessions body
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `project` | string | yes | Git SSH URL (e.g. `git@github.com:user/repo.git`) |
-| `branch` | string | yes | Existing branch to clone from |
-| `newBranch` | string | no | Create and checkout this branch after clone |
-| `force` | boolean | no | If `true`, reset an existing workspace instead of cloning fresh |
-
-## Environment variables
-
-These are set by supervisord (see `supervisord.conf`) and can be overridden:
-
-| Variable | Default | Description |
-|---|---|---|
-| `PORT` | `3000` | API listen port |
-| `STATE_FILE` | `/home/ubuntu/.claude-sessions/state.json` | Session state path |
-| `WORKSPACE_ROOT` | `/home/ubuntu/workspace` | Root for cloned repos |
-| `GITHUB_USER` | `edkief` | Fallback username for unauthenticated repo listing |
-| `GITHUB_TOKEN` | — | GitHub PAT for authenticated API calls (injected from Secret) |
-| `POD_NAME` | `unknown` | Injected by Kubernetes Downward API, shown in the UI |
+To roll back at any point: re-apply `k8s/legacy-claude-pod.yaml` and scale the
+dashboard to 0. The new per-repo PVCs are independent and survive.
 
 ## Local development
 
-Run the API server locally (no Kubernetes required):
-
 ```bash
-cd api
+cd dashboard
 npm install
-node server.js
+npm test                        # pure-function tests, no cluster
+NAMESPACE=dev node server.js    # runs against your kubeconfig
 ```
 
-The API listens on port 3000 and serves the web UI at `http://localhost:3000`. Session management commands (byobu, tmux, claude) won't function outside the container, but the UI and GitHub API calls work fine for development.
+Unlike the previous version (which needed tmux and a live byobu), the dashboard
+runs anywhere a kubeconfig does. The UI is served at `http://localhost:3000`.
 
-## Key design decisions
+## Further reading
 
-- **`Recreate` deployment strategy** — required by the `ReadWriteOnce` PVC; only one pod can mount the volume at a time.
-- **Atomic state writes** — session state is written to a `.tmp` file and renamed to avoid partial reads on crash.
-- **supervisord runs as root, spawns services as `ubuntu`** — Node and npm binaries are symlinked to `/usr/local/bin` so supervisord (which has no `.bashrc`) can find them.
-- **byobu pre-configured for tmux keybindings** — the `~/.byobu` symlink sets `ctrl+b` as the prefix and suppresses the first-run prompt.
-- **Auto-attach on login** — the bash profile checks `~/.claude-session` (written by the activate endpoint within the last 10 s) and attaches to the named byobu session automatically.
+`AGENTS.md` covers the design in depth: the workspace-key abstraction and how to
+switch to per-branch storage, the config allowlist and merge rules, the RBAC
+omissions and why, and the constraints around RWO volumes and bare Pods.
