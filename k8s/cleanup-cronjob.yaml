@@ -1,0 +1,41 @@
+---
+# Replaces the old in-container /etc/cron.d/workspace-cleanup, which deleted
+# directories on a shared volume. Storage is now per-repo PVCs that outlive
+# sessions and hold a warm checkout, so the window is 30 days, not 7.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: claude-workspace-prune
+  namespace: dev
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: claude-dashboard
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+          containers:
+            - name: prune
+              image: registry.kieffer.me/claude-workstation/dashboard:latest
+              imagePullPolicy: Always
+              command: ["node", "/app/prune-pvcs.js", "--days", "30"]
+              env:
+                - name: NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "64Mi"
+                limits:
+                  cpu: "200m"
+                  memory: "256Mi"

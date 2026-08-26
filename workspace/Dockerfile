@@ -17,7 +17,6 @@ RUN apt-get update && apt-get install -y \
     vim \
     byobu \
     supervisor \
-    cron \
     openssh-client \
     unzip \
     python3 python3-venv \
@@ -85,13 +84,22 @@ RUN . "$NVM_DIR/nvm.sh" \
     && rm -rf /var/lib/apt/lists/*
 
 USER ubuntu
-WORKDIR /home/ubuntu/api
-COPY --chown=ubuntu:ubuntu api/package.json ./
-RUN npm install --omit=dev
-COPY --chown=ubuntu:ubuntu api/ ./
 
-RUN mkdir -p /home/ubuntu/workspace /home/ubuntu/.claude-sessions \
-    && echo '[]' > /home/ubuntu/.claude-sessions/state.json
+# Agent + bootstrap scripts. No API server here any more: session management
+# lives in the dashboard image, and this pod only runs one workspace.
+COPY --chown=ubuntu:ubuntu workspace/agent.js /home/ubuntu/agent/agent.js
+COPY --chown=ubuntu:ubuntu workspace/bootstrap/ /home/ubuntu/bootstrap/
+RUN chmod +x /home/ubuntu/bootstrap/*.sh
+
+# Bootstrap state (stage markers, checkout path) -- uid-1000 owned, container
+# layer only, deliberately not on the PVC.
+RUN mkdir -p /home/ubuntu/.workspace-state
+
+# /workspace is the PVC mount point; it needs root to create and uid 1000 to
+# use (fsGroup 1000 takes over once the volume is attached).
+USER root
+RUN mkdir -p /workspace && chown ubuntu:ubuntu /workspace
+USER ubuntu
 
 # Pre-select the tmux backend and the ctrl-a escape mode so byobu's first-run
 # "Configure Byobu's ctrl-a behavior..." prompt never appears on pod restart.
@@ -102,32 +110,32 @@ RUN mkdir -p /home/ubuntu/.byobu \
 RUN git config --global user.name "Edouard Kieffer" \
     && git config --global user.email "edkief@users.noreply.github.com"
 
-# On login, attach to the byobu session named in ~/.claude-session if written within the last 10s
+# A login shell drops the user into the workspace checkout. The old
+# ~/.claude-session 10-second-mtime attach hack is gone: ttyd now attaches
+# directly to the single named byobu session (see supervisord.conf).
 RUN printf '%s\n' \
-    'if [ -f "$HOME/.claude-session" ]; then' \
-    '  _age=$(( $(date +%s) - $(date -r "$HOME/.claude-session" +%s) ))' \
-    '  if [ "$_age" -le 10 ]; then' \
-    '    _target=$(node -e "process.stdout.write(JSON.parse(require(\"fs\").readFileSync(process.env.HOME+\"/.claude-session\",\"utf8\")).byobuSession)")' \
-    '    rm -f "$HOME/.claude-session"' \
-    '    exec byobu attach-session -t "$_target"' \
-    '  fi' \
-    '  rm -f "$HOME/.claude-session"' \
+    'if [ -f "$HOME/.workspace-state/dir" ]; then' \
+    '  cd "$(cat "$HOME/.workspace-state/dir")" || true' \
     'fi' \
     >> /home/ubuntu/.bash_profile
 
 USER root
-COPY supervisord.conf /etc/supervisor/conf.d/workstation.conf
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Daily cleanup: delete session workspaces older than 7 days at 2am
-RUN printf '0 2 * * * ubuntu WORKSPACE_ROOT=/home/ubuntu/workspace STATE_FILE=/home/ubuntu/.claude-sessions/state.json /usr/bin/node /home/ubuntu/api/cleanup.js >> /var/log/workspace-cleanup.log 2>&1\n' \
-    > /etc/cron.d/workspace-cleanup \
-    && chmod 0644 /etc/cron.d/workspace-cleanup
+# rclone backs claude-config-sync (single static binary, native S3).
+RUN curl -fsSL -o /tmp/rclone.zip https://downloads.rclone.org/rclone-current-linux-amd64.zip \
+    && unzip -q -j /tmp/rclone.zip '*/rclone' -d /usr/local/bin \
+    && chmod +x /usr/local/bin/rclone \
+    && rm -f /tmp/rclone.zip
+
+COPY shared/claude-config-sync/claude-config-sync /usr/local/bin/claude-config-sync
+COPY workspace/supervisord.conf /etc/supervisor/conf.d/workstation.conf
+COPY workspace/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/claude-config-sync
 
 USER ubuntu
-WORKDIR /home/ubuntu/workspace
+WORKDIR /workspace
 
-EXPOSE 7681 3000 5432
+# 7681 ttyd (proxied by the dashboard), 7682 agent, 5432 scratch postgres.
+EXPOSE 7681 7682 5432
 
 CMD ["/usr/local/bin/entrypoint.sh"]
