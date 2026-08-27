@@ -68,6 +68,8 @@ test('dashboard/.env.example defaults match the code defaults', () => {
         PVC_CACHE_MS: cfg.pvcCacheMs,
         TARGET_CACHE_MS: cfg.targetCacheMs,
         PVC_TOUCH_MS: cfg.pvcTouchMs,
+        TOKEN_CHECK_MS: cfg.tokenCheckMs,
+        TOKEN_WARN_MS: cfg.tokenWarnMs,
         CONFIG_PUSH_POLICY: cfg.configPushPolicy,
         CONFIG_S3_SECRET_RW: cfg.s3SecretRw,
         CONFIG_S3_SECRET_RO: cfg.s3SecretRo,

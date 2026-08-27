@@ -251,6 +251,68 @@
     display: inline-block; font-size: .68rem; padding: .1rem .4rem; border-radius: 4px;
     background: var(--warning-soft); color: var(--warning); margin-left: .4rem;
   }
+  /* ---------- In-card log panel ---------- */
+  .logs-panel { border-top: 1px solid var(--border); margin-top: .2rem; }
+  .logs-panel > summary {
+    cursor: pointer;
+    list-style: none;
+    font-size: .76rem;
+    color: var(--text-muted);
+    padding: .4rem 0 .1rem;
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    user-select: none;
+  }
+  .logs-panel > summary::-webkit-details-marker { display: none; }
+  .logs-panel > summary::before {
+    content: "▸";
+    font-size: .7rem;
+    transition: transform .12s;
+  }
+  .logs-panel[open] > summary::before { transform: rotate(90deg); }
+  .logs-panel > summary:hover { color: var(--text); }
+  .logs-status { margin-left: auto; font-size: .7rem; color: var(--text-subtle); }
+  .logs-toolbar {
+    display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
+    font-size: .72rem; color: var(--text-muted); padding: .35rem 0;
+  }
+  .logs-toolbar label { display: flex; align-items: center; gap: .3rem; }
+  .logs-toolbar select {
+    font-size: .72rem; padding: .1rem .25rem;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+  }
+  .logs-output {
+    font-family: var(--font-mono);
+    font-size: .72rem;
+    line-height: 1.45;
+    white-space: pre;
+    overflow: auto;
+    max-height: 18rem;
+    margin: 0 0 .5rem;
+    padding: .55rem .7rem;
+    background: var(--surface-2, #0d1117);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+  }
+
+  /* ---------- Token warning ---------- */
+  .token-banner {
+    display: none;
+    align-items: flex-start;
+    gap: .6rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: .7rem .9rem;
+    font-size: .82rem;
+  }
+  .token-banner.show { display: flex; }
+  .token-banner.warn { color: var(--warning); background: var(--warning-soft); border-color: transparent; }
+  .token-banner.bad  { color: var(--danger);  background: var(--danger-soft);  border-color: transparent; }
+  .token-banner .token-actions { margin-left: auto; display: flex; gap: .4rem; flex-shrink: 0; }
+
   .ws-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
   .ws-table th { text-align: left; font-weight: 500; color: var(--text-muted); padding: .3rem .5rem; }
   .ws-table td { padding: .35rem .5rem; border-top: 1px solid var(--border); }
@@ -458,6 +520,14 @@
 </header>
 
 <main class="wrap">
+
+  <div class="token-banner" id="token-banner">
+    <span id="token-banner-text"></span>
+    <span class="token-actions">
+      <a class="btn btn-ghost btn-sm" href="/config-tty/" target="_blank">Config shell</a>
+      <button class="btn btn-ghost btn-sm" onclick="loadTokenStatus(true)">Re-check</button>
+    </span>
+  </div>
 
   <section class="card">
     <div class="card-head">
@@ -775,12 +845,38 @@ function makeSessionCard(s) {
       <div class="session-actions">
         <button class="btn btn-ghost btn-sm" data-role="terminal"
                 onclick="openTerminal('${escHtml(s.id)}')"
-                ${s.ready ? '' : 'disabled title="workspace is still starting"'}>Terminal</button>
-        <button class="btn btn-ghost btn-sm" onclick="openLogs('${escHtml(s.id)}')">Logs</button>
+                ${terminalAttrs(s)}>Terminal</button>
         <button class="btn btn-danger btn-sm" onclick="terminateSession('${escHtml(s.id)}')">Terminate</button>
       </div>
-    </div>`;
+    </div>
+    <details class="logs-panel" data-role="logs">
+      <summary>Logs<span class="logs-status" data-role="logs-status"></span></summary>
+      <div class="logs-toolbar">
+        <label><input type="checkbox" data-role="logs-auto" checked> Auto-refresh</label>
+        <label>Lines
+          <select data-role="logs-tail">
+            <option value="200">200</option>
+            <option value="500" selected>500</option>
+            <option value="2000">2000</option>
+            <option value="5000">5000</option>
+          </select>
+        </label>
+        <a href="/api/sessions/${encodeURIComponent(s.id)}/logs?tail=500" target="_blank">Open raw</a>
+      </div>
+      <pre class="logs-output" data-role="logs-output">Loading logs…</pre>
+    </details>`;
+  wireLogPanel(card, s.id);
   return card;
+}
+
+// The Terminal button follows terminalReady, not ready: after a login failure
+// the pod is permanently not-ready, and the terminal is the only place the
+// user can run /login to fix it.
+function terminalAttrs(s) {
+  if (s.terminalReady) {
+    return s.authFailed ? 'title="Claude needs a login \u2014 run /login here"' : '';
+  }
+  return `disabled title="${escHtml(s.message || 'workspace is still starting')}"`;
 }
 
 function renderSessions(sessions) {
@@ -815,9 +911,10 @@ function renderSessions(sessions) {
       }
       const term = card.querySelector('[data-role="terminal"]');
       if (term) {
-        term.disabled = !s.ready;
-        if (s.ready) term.removeAttribute('title');
-        else term.title = s.message || 'workspace is still starting';
+        term.disabled = !s.terminalReady;
+        if (!s.terminalReady) term.title = s.message || 'workspace is still starting';
+        else if (s.authFailed) term.title = 'Claude needs a login \u2014 run /login here';
+        else term.removeAttribute('title');
       }
     }
     const atPos = list.children[i];
@@ -826,7 +923,7 @@ function renderSessions(sessions) {
 
   const currentIds = new Set(sessions.map(s => s.id));
   for (const [id, card] of existing) {
-    if (!currentIds.has(id)) card.remove();
+    if (!currentIds.has(id)) { stopLogPoll(id); card.remove(); }
   }
 }
 
@@ -836,8 +933,67 @@ function openTerminal(id) {
   window.open(s ? s.terminalUrl : `/tty/${encodeURIComponent(id)}/`, '_blank');
 }
 
-function openLogs(id) {
-  window.open(`/api/sessions/${encodeURIComponent(id)}/logs?tail=500`, '_blank');
+// --- In-card logs ---
+// A panel rather than a new tab: the point of these logs is to watch a session
+// that is starting or stuck, right next to the status that made you look.
+const LOG_POLL_MS = 3_000;
+const logTimers = new Map();
+
+function wireLogPanel(card, id) {
+  const panel = card.querySelector('[data-role="logs"]');
+  const auto = card.querySelector('[data-role="logs-auto"]');
+  const tail = card.querySelector('[data-role="logs-tail"]');
+
+  panel.addEventListener('toggle', () => {
+    if (panel.open) refreshLogs(card, id, { schedule: true });
+    else stopLogPoll(id);
+  });
+  auto.addEventListener('change', () => {
+    stopLogPoll(id);
+    if (panel.open) refreshLogs(card, id, { schedule: true });
+  });
+  tail.addEventListener('change', () => {
+    const link = card.querySelector('.logs-toolbar a');
+    if (link) link.href = `/api/sessions/${encodeURIComponent(id)}/logs?tail=${tail.value}`;
+    if (panel.open) refreshLogs(card, id, { schedule: true });
+  });
+}
+
+function stopLogPoll(id) {
+  clearTimeout(logTimers.get(id));
+  logTimers.delete(id);
+}
+
+async function refreshLogs(card, id, { schedule = false } = {}) {
+  const panel = card.querySelector('[data-role="logs"]');
+  if (!panel || !panel.open || !card.isConnected) return stopLogPoll(id);
+
+  const out = card.querySelector('[data-role="logs-output"]');
+  const statusEl = card.querySelector('[data-role="logs-status"]');
+  const lines = card.querySelector('[data-role="logs-tail"]').value;
+
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(id)}/logs?tail=${lines}`);
+    const text = await res.text();
+    if (out.textContent !== text) {
+      // Only pin to the bottom if the reader was already there -- otherwise a
+      // refresh yanks them off the line they were reading.
+      const atBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 40;
+      out.textContent = text || '(no output yet)';
+      if (atBottom) out.scrollTop = out.scrollHeight;
+    }
+    statusEl.textContent = res.ok
+      ? `updated ${new Date().toLocaleTimeString()}`
+      : `error ${res.status}`;
+  } catch {
+    statusEl.textContent = 'fetch failed';
+  } finally {
+    const auto = card.querySelector('[data-role="logs-auto"]');
+    if (schedule && auto.checked && panel.open && card.isConnected) {
+      stopLogPoll(id);
+      logTimers.set(id, setTimeout(() => refreshLogs(card, id, { schedule: true }), LOG_POLL_MS));
+    }
+  }
 }
 
 async function terminateSession(id) {
@@ -1263,14 +1419,45 @@ async function pushConfig() {
   }
 }
 
+// --- shared Claude token watchdog -------------------------------------------
+// The dashboard re-checks the shared login on a timer; this only renders its
+// verdict. An expired shared token breaks every *new* workspace, which used to
+// show up only as a session stuck on "starting Claude…".
+const TOKEN_TONE = {
+  valid: null, unknown: null,
+  expiring: 'warn', stale: 'warn',
+  expired: 'bad', missing: 'bad', unreadable: 'bad',
+};
+
+async function loadTokenStatus(fresh = false) {
+  const banner = document.getElementById('token-banner');
+  const text = document.getElementById('token-banner-text');
+  if (!banner) return;
+  try {
+    const d = await fetch(`/api/config/token${fresh ? '?fresh=1' : ''}`).then(r => r.json());
+    const tone = TOKEN_TONE[d.state];
+    if (!tone) {
+      banner.className = 'token-banner';
+      return;
+    }
+    banner.className = `token-banner show ${tone}`;
+    text.textContent = `Claude login: ${d.message || d.state}`;
+  } catch {
+    banner.className = 'token-banner';
+  }
+}
+
 loadRepos();
 loadSessions();          // self-scheduling: 2s while anything is starting, else 10s
 loadResources();
 loadDiskUsage();
 loadConfigStatus();
+loadTokenStatus();
 setInterval(loadResources,     5_000);
 setInterval(loadDiskUsage,    60_000);
 setInterval(loadConfigStatus, 60_000);
+// The server-side check is the 30-minute one; this just re-reads its verdict.
+setInterval(loadTokenStatus, 300_000);
 </script>
 </body>
 </html>

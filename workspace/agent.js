@@ -28,6 +28,14 @@ const ERROR_FILE = `${STATE_DIR}/error`;
 const READY_FILE = `${STATE_DIR}/ready`;
 const TMUX_SESSION = 'claude';
 const SESSION_NAME = process.env.CLAUDE_SESSION_NAME || '';
+const HOME = process.env.HOME || '/home/ubuntu';
+const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || `${HOME}/.claude`;
+const CREDENTIALS_FILE = `${CLAUDE_DIR}/.credentials.json`;
+
+// How long claude may take to appear in /proc after the pane launch before we
+// call it a failed launch rather than a slow one. npm install + first run on a
+// cold container layer is the slow case this has to clear.
+const LAUNCH_TIMEOUT_MS = Number(process.env.WORKSPACE_LAUNCH_TIMEOUT_MS || 180000);
 
 // Self-heal knobs. Claude is launched by entrypoint.sh with `send-keys` into
 // the tmux pane, NOT by supervisord -- so nothing respawns it when it dies.
@@ -40,6 +48,29 @@ const RELAUNCH_BACKOFF_MS = Number(process.env.WORKSPACE_RELAUNCH_BACKOFF_MS || 
 let missingSince = null;   // first probe that saw the session gone
 let relaunches = 0;
 let lastRelaunchAt = 0;
+let launchingSince = null; // first probe that saw stage=starting without claude
+
+/**
+ * Terminal failures a *login* fixes. Claude prints these and exits (or sits at
+ * a prompt), so the process is simply absent from /proc -- indistinguishable
+ * from "still starting" unless the pane is read. Reporting them as
+ * "starting Claude..." forever is the bug these patterns exist to fix.
+ *
+ * Kept narrow on purpose: a false positive marks a healthy workspace failed.
+ */
+const AUTH_PATTERNS = [
+    /invalid api key/i,
+    /please run\s*\/login/i,
+    /run\s*`?\/login`?/i,
+    /\blogin required\b/i,
+    /authentication (failed|error|required)/i,
+    /oauth (token )?(expired|revoked|invalid)/i,
+    /(session|token|credentials) (has |have )?expired/i,
+    /refresh token (is )?(expired|invalid)/i,
+    /401 unauthorized/i,
+    /\bunauthorized\b.*\b(token|api|auth)/i,
+    /credit balance is too low/i,
+];
 
 function readFile(file) {
     try { return fs.readFileSync(file, 'utf8').trim(); } catch { return null; }
@@ -92,6 +123,93 @@ function claudeRemoteRunning() {
     return false;
 }
 
+/** Is ttyd up? Once it is, the terminal is reachable even if claude is not --
+ * which is the only way a user can run /login to fix an expired token. */
+function ttydRunning() {
+    let entries;
+    try { entries = fs.readdirSync('/proc'); } catch { return false; }
+    for (const pid of entries) {
+        if (!/^\d+$/.test(pid)) continue;
+        let cmdline;
+        try { cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8'); } catch { continue; }
+        if (/(^|\/)ttyd\0/.test(cmdline)) return true;
+    }
+    return false;
+}
+
+/**
+ * The OAuth token as this pod sees it. Expiry is read, never validated against
+ * the API: claude refreshes the token itself, and a network probe from a
+ * readiness path would make the probe fail on an unrelated outage.
+ */
+function credentials() {
+    let raw;
+    try { raw = fs.readFileSync(CREDENTIALS_FILE, 'utf8'); } catch {
+        return { present: false, expiresAt: null, expired: false };
+    }
+    let doc;
+    try { doc = JSON.parse(raw); } catch {
+        return { present: true, parseError: true, expiresAt: null, expired: false };
+    }
+    const oauth = doc.claudeAiOauth || doc.oauth || {};
+    const expiresAt = Number(oauth.expiresAt) || null;
+    return {
+        present: true,
+        expiresAt,
+        expired: expiresAt !== null && expiresAt <= Date.now(),
+        subscriptionType: oauth.subscriptionType || null,
+        // A refresh token is what lets claude renew an expired access token on
+        // its own, so "expired" alone is not yet a login failure.
+        hasRefreshToken: Boolean(oauth.refreshToken),
+    };
+}
+
+/** First pane line matching a known auth failure, or null. */
+function paneAuthFailure(pane) {
+    for (const line of pane.split('\n')) {
+        if (AUTH_PATTERNS.some((re) => re.test(line))) return line.trim();
+    }
+    return null;
+}
+
+/**
+ * Why claude is not running, when it should be. Returns an auth-failed result
+ * or null. Checked before the relaunch ladder: retyping the launch command, or
+ * restarting the container, cannot fix an expired login, and looping on it just
+ * buries the one message the user needs to see.
+ *
+ * A pane message is conclusive immediately. The credentials file is only
+ * circumstantial -- claude may simply not have started yet, and an
+ * ANTHROPIC_API_KEY setup has no OAuth file at all -- so those verdicts wait
+ * out a grace period and stand down entirely when an API key is present.
+ */
+const CRED_GRACE_MS = 30000;
+
+function authFailure(absentForMs = Infinity, pane = capturePane()) {
+    const hit = paneAuthFailure(pane);
+    if (hit) {
+        return { reason: hit, detail: tail(pane) };
+    }
+    if (absentForMs < CRED_GRACE_MS || process.env.ANTHROPIC_API_KEY) return null;
+
+    const creds = credentials();
+    if (!creds.present) {
+        return {
+            reason: 'no Claude credentials in this workspace',
+            detail: `${CREDENTIALS_FILE} is missing; run /login in the terminal, then `
+                + '`claude-config-sync push` from the config shell.',
+        };
+    }
+    if (creds.expired && !creds.hasRefreshToken) {
+        return {
+            reason: 'Claude OAuth token expired',
+            detail: `token expired ${new Date(creds.expiresAt).toISOString()} and carries no `
+                + 'refresh token; run /login in the terminal.',
+        };
+    }
+    return null;
+}
+
 function wasReadyOnce() {
     return readFile(READY_FILE) !== null;
 }
@@ -129,34 +247,60 @@ function tryRelaunch() {
  */
 function health() {
     const stage = readFile(STAGE_FILE) || 'starting';
+    const terminalReady = ttydRunning();
 
     if (stage === 'failed') {
-        return { ready: false, stage: 'failed', detail: tail(readFile(ERROR_FILE) || '') };
+        return { ready: false, stage: 'failed', terminalReady,
+                 detail: tail(readFile(ERROR_FILE) || '') };
     }
     if (stage !== 'starting') {
-        return { ready: false, stage, detail: null };
+        return { ready: false, stage, terminalReady, detail: null };
     }
     if (!tmuxSessionExists()) {
-        return { ready: false, stage: 'starting', detail: 'tmux session not created yet' };
+        return { ready: false, stage: 'starting', terminalReady,
+                 detail: 'tmux session not created yet' };
     }
 
     if (claudeRemoteRunning()) {
         missingSince = null;
+        launchingSince = null;
         relaunches = 0;
         if (!wasReadyOnce()) markReady();
-        return { ready: true, stage: 'ready', detail: null };
+        return { ready: true, stage: 'ready', terminalReady, detail: null };
+    }
+
+    // Claude is not running. Time the absence first, then ask whether a login
+    // would fix it -- an auth failure is terminal, and neither relaunching in
+    // the pane nor restarting the container clears it.
+    if (wasReadyOnce()) {
+        if (missingSince === null) missingSince = Date.now();
+    } else if (launchingSince === null) {
+        launchingSince = Date.now();
+    }
+    const absentSince = wasReadyOnce() ? missingSince : launchingSince;
+    // One capture, reused: this runs on every 3s probe while claude is absent.
+    const pane = capturePane();
+    const auth = authFailure(Date.now() - absentSince, pane);
+    if (auth) {
+        return {
+            ready: false,
+            stage: 'auth-failed',
+            terminalReady,
+            reason: auth.reason,
+            detail: auth.detail,
+        };
     }
 
     // Ready once, gone now: a real regression. Not-ready immediately, and the
     // self-heal ladder starts. READY_FILE lives on the container layer, so a
     // container restart clears it and the pod re-proves readiness from scratch.
     if (wasReadyOnce()) {
-        if (missingSince === null) missingSince = Date.now();
         tryRelaunch();
         const secs = Math.round((Date.now() - missingSince) / 1000);
         return {
             ready: false,
             stage: 'session-lost',
+            terminalReady,
             detail: `claude remote (--name ${SESSION_NAME || '?'}) not running for ${secs}s; `
                 + `relaunch attempts ${relaunches}/${RELAUNCH_MAX}`,
         };
@@ -164,11 +308,24 @@ function health() {
 
     // Pre-ready only: the pane is still the bootstrap/launch transcript here,
     // so it is a usable failure signal and a usable progress message.
-    const pane = capturePane();
     if (/command not found|Error:/.test(pane)) {
-        return { ready: false, stage: 'failed', detail: tail(pane) };
+        return { ready: false, stage: 'failed', terminalReady, detail: tail(pane) };
     }
-    return { ready: false, stage: 'starting', detail: tail(pane) };
+
+    // Claude has never come up and nothing in the pane says why. Left alone
+    // this reads as "starting Claude..." indefinitely, so time it out into a
+    // stage the UI shows as a failure with the pane attached.
+    const waited = Date.now() - launchingSince;
+    if (waited > LAUNCH_TIMEOUT_MS) {
+        return {
+            ready: false,
+            stage: 'launch-failed',
+            terminalReady,
+            reason: `claude did not start within ${Math.round(waited / 1000)}s`,
+            detail: tail(pane),
+        };
+    }
+    return { ready: false, stage: 'starting', terminalReady, detail: tail(pane) };
 }
 
 /**
@@ -183,6 +340,11 @@ function live() {
     if (!SELF_HEAL) return { ok: true, reason: 'self-heal disabled' };
     if (!wasReadyOnce()) return { ok: true, reason: 'bootstrap in progress' };
     if (claudeRemoteRunning()) return { ok: true };
+    // A restart cannot log anybody in. Keep the container up so the user can
+    // open the terminal and run /login; readiness already reports the failure.
+    if (authFailure(Date.now() - (missingSince ?? 0))) {
+        return { ok: true, reason: 'authentication required' };
+    }
     if (relaunches < RELAUNCH_MAX) {
         return { ok: true, reason: `relaunching (${relaunches}/${RELAUNCH_MAX})` };
     }
@@ -216,6 +378,7 @@ function session() {
         sessionName: process.env.CLAUDE_SESSION_NAME || null,
         stage: readFile(STAGE_FILE) || 'starting',
         claudeConnected: health().ready,
+        credentials: credentials(),
     };
 }
 
@@ -247,6 +410,10 @@ http.createServer((req, res) => {
     }
 
     if (path === '/session') return send(res, 200, session());
+
+    // Token state only -- never the token. The dashboard polls this to warn
+    // before a login expires rather than after a session mysteriously dies.
+    if (path === '/auth') return send(res, 200, credentials());
 
     send(res, 404, { error: 'not found' });
 }).listen(PORT, '0.0.0.0', () => {

@@ -13,6 +13,7 @@ const metrics = require('./lib/metrics');
 const github = require('./lib/github');
 const agent = require('./lib/agentClient');
 const ttyProxy = require('./lib/ttyProxy');
+const tokenCheck = require('./lib/tokenCheck');
 const { ValidationError, validateRepoFullName } = require('./lib/validate');
 const { isWorkspaceId } = require('./lib/naming');
 
@@ -70,7 +71,7 @@ app.use('/tty/:id', asyncRoute(async (req, res) => {
             .type('html').send(ttyProxy.notFoundPage(id));
     }
     if (target.notReady) {
-        const session = sessions.describePod(target.pod);
+        const session = sessions.describePod(target.pod, { agentHealth: target.agentHealth });
         return res.status(503).type('html').send(ttyProxy.notReadyPage(id, session));
     }
     // ttyd was started with -b /tty/<id>, so the full original path (which
@@ -114,6 +115,12 @@ app.get('/api/config/status', asyncRoute(async (req, res) => {
     }
     res.json({ available: true, pushPolicy: cfg.configPushPolicy, ...parsed });
 }));
+
+// The token watchdog's latest verdict. Served from cache: the check reads a
+// file, but the UI polls this and there is no reason to stat it every second.
+app.get('/api/config/token', (req, res) => {
+    res.json(req.query.fresh === '1' ? tokenCheck.check() : tokenCheck.status());
+});
 
 app.post('/api/config/push', asyncRoute(async (req, res) => {
     const result = await runConfigSync(['push', '--json']);
@@ -342,6 +349,8 @@ server.on('upgrade', async (req, socket, head) => {
         socket.destroy();
     }
 });
+
+tokenCheck.start();
 
 server.listen(cfg.port, () => {
     console.log(`[dashboard] listening on ${cfg.port}, namespace=${cfg.namespace}, ` +

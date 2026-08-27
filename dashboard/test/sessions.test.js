@@ -181,3 +181,49 @@ test('without an agent, the pod Warning event explains a stuck Pending', () => {
     });
     assert.match(s.message, /FailedAttachVolume: Multi-Attach/);
 });
+
+// --- agent-reported failures ------------------------------------------------
+// Kubernetes sees a happy Running pod in all of these; only the agent knows
+// claude never came up. Before this, an expired login read as "starting…".
+
+const starting = { phase: 'Running', conditions: [{ type: 'Ready', status: 'False' }] };
+
+test('an auth failure is a failure, not a permanent spinner', () => {
+    const s = describePod(pod({ status: starting }), {
+        agentHealth: {
+            stage: 'auth-failed',
+            reason: 'Claude OAuth token expired',
+            terminalReady: true,
+        },
+    });
+    assert.equal(s.status, 'failed');
+    assert.equal(s.authFailed, true);
+    assert.match(s.message, /login required/i);
+    assert.match(s.message, /OAuth token expired/);
+});
+
+test('a claude that never starts times out into a failure', () => {
+    const s = describePod(pod({ status: starting }), {
+        agentHealth: { stage: 'launch-failed', reason: 'claude did not start within 190s' },
+    });
+    assert.equal(s.status, 'failed');
+    assert.equal(s.authFailed, false);
+});
+
+test('the terminal stays reachable after an auth failure', () => {
+    const s = describePod(pod({ status: starting }), {
+        agentHealth: { stage: 'auth-failed', terminalReady: true },
+    });
+    // ready is still false -- claude is not running -- but /login has to be
+    // typeable somewhere.
+    assert.equal(s.ready, false);
+    assert.equal(s.terminalReady, true);
+});
+
+test('a bootstrap still in progress is not turned into a failure', () => {
+    for (const stage of ['syncing-config', 'cloning', 'starting', 'session-lost']) {
+        const s = describePod(pod({ status: starting }), { agentHealth: { stage } });
+        assert.equal(s.status, 'starting', stage);
+        assert.equal(s.authFailed, false, stage);
+    }
+});

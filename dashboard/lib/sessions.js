@@ -20,6 +20,18 @@ const sessionsCache = new k8s.TtlCache(cfg.sessionsCacheMs);
 const UNSETTLED = new Set(['starting', 'terminating']);
 
 /**
+ * Agent stages that mean the workspace will not become ready on its own.
+ *
+ * Kubernetes cannot see these: the pod is Running and the container is happy,
+ * only claude is not. Without this the UI shows "starting Claude…" forever --
+ * which is exactly what an expired login used to look like.
+ */
+const FATAL_STAGES = new Set(['failed', 'auth-failed', 'launch-failed']);
+
+/** Stages the user fixes by logging in, not by replacing the workspace. */
+const AUTH_STAGES = new Set(['auth-failed']);
+
+/**
  * Map a Pod to a UI status. This replaces the old heuristic of scraping
  * `tmux capture-pane` output for the strings "Connected" or "Ready".
  */
@@ -86,13 +98,23 @@ function parseMemLimit(value) {
 /** The session object returned by every endpoint. */
 function describePod(pod, { agentHealth = null, warning = null } = {}) {
     const ann = pod.metadata?.annotations || {};
-    const status = deriveStatus(pod);
+    let status = deriveStatus(pod);
+    // The agent's verdict overrides a merely-Pending-looking pod: it is the
+    // only thing that can see a claude that failed to start.
+    if (status === 'starting' && FATAL_STAGES.has(agentHealth?.stage)) status = 'failed';
     const cs = (pod.status?.containerStatuses || [])[0];
     const branch = ann[ANN.branch] || 'unknown';
     const repo = ann[ANN.repoFullName] || 'unknown';
 
+    const authFailed = AUTH_STAGES.has(agentHealth?.stage);
+
     let message = null;
-    if (status === 'starting') {
+    if (agentHealth?.stage && FATAL_STAGES.has(agentHealth.stage)) {
+        // The agent knows the actual reason ("Claude OAuth token expired");
+        // a pod-level reason here would only say "Running".
+        message = [stageLabel(agentHealth.stage), agentHealth.reason]
+            .filter(Boolean).join(' — ');
+    } else if (status === 'starting') {
         message = agentHealth?.stage
             ? stageLabel(agentHealth.stage)
             : (warning ? `${warning.reason}: ${warning.message}` : podReason(pod));
@@ -117,6 +139,13 @@ function describePod(pod, { agentHealth = null, warning = null } = {}) {
         status,
         phase: pod.status?.phase || 'Unknown',
         ready: status === 'running' || status === 'degraded',
+        // ttyd outlives claude, so the terminal stays reachable after an auth
+        // failure -- which is where the user has to go to run /login.
+        terminalReady: status === 'running' || status === 'degraded'
+            || Boolean(agentHealth?.terminalReady),
+        authFailed,
+        stage: agentHealth?.stage || null,
+        detail: agentHealth?.detail || null,
         reason: podReason(pod),
         message: message || null,
         startedAt: ann[ANN.startedAt] || pod.metadata?.creationTimestamp || null,
@@ -135,6 +164,10 @@ function stageLabel(stage) {
         // The agent reports this when claude died after the pod was ready; it
         // relaunches in the pane, then fails /livez so the kubelet restarts.
         'session-lost': 'Claude session lost; relaunching…',
+        // Terminal, and fixed by a login rather than a restart -- the agent
+        // deliberately stops relaunching and stops failing /livez here.
+        'auth-failed': 'Claude login required (open the terminal and run /login)',
+        'launch-failed': 'Claude failed to start',
         failed: 'workspace bootstrap failed',
     }[stage] || stage;
 }
@@ -281,7 +314,7 @@ async function restartSession(id) {
 }
 
 module.exports = {
-    deriveStatus, describePod, describeWithContext, listSessions, getSession,
+    deriveStatus, describePod, stageLabel, FATAL_STAGES, describeWithContext, listSessions, getSession,
     createSession, deleteSession, restartSession,
     ConflictError, CapacityError, sessionsCache,
     parseCpuLimit, parseMemLimit,

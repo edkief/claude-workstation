@@ -3,6 +3,7 @@
 const http = require('http');
 const cfg = require('./config');
 const { getPod } = require('./k8s');
+const agent = require('./agentClient');
 
 const TTY_PORT = 7681;
 const targetCache = new Map();       // workspace id -> { ip, port, expiresAt }
@@ -29,8 +30,14 @@ async function resolveTarget(id) {
 
     const ready = (pod.status?.conditions || [])
         .some((c) => c.type === 'Ready' && c.status === 'True');
-    if (!pod.status?.podIP || !ready) {
-        return { notReady: true, pod };
+    if (!pod.status?.podIP) return { notReady: true, pod };
+    if (!ready) {
+        // Readiness here means "claude is running", which is stricter than
+        // "the terminal works". An expired login makes the pod not-ready
+        // forever, and the terminal is the only place to run /login -- so ask
+        // the agent whether ttyd is up rather than refusing outright.
+        const health = await agent.health(pod.status.podIP);
+        if (!health?.terminalReady) return { notReady: true, pod, agentHealth: health };
     }
 
     const target = {

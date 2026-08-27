@@ -114,6 +114,35 @@ The ladder, after `$WORKSPACE_STATE_DIR/ready` exists:
 a claude that has *never* started stays 503 for a human rather than looping the
 bootstrap. `WORKSPACE_SELF_HEAL=0` disables steps 2 and 3.
 
+### Terminal failures: never a permanent spinner
+
+A pod whose claude cannot start is Running, its container is happy, and
+Kubernetes has nothing to report — so a login failure used to render as
+*starting Claude…* forever. The agent therefore classifies the absence of
+claude instead of just reporting it, and `describePod()` promotes those stages
+to status `failed`:
+
+| stage | detected by | UI |
+|---|---|---|
+| `auth-failed` | a known auth line in the pane, or (after 30 s, and never with `ANTHROPIC_API_KEY` set) missing / expired-without-refresh `~/.claude/.credentials.json` | *Claude login required (open the terminal and run /login)* + the reason |
+| `launch-failed` | claude absent for `WORKSPACE_LAUNCH_TIMEOUT_MS` (default 180 s) with nothing in the pane explaining why | *Claude failed to start* + the pane tail |
+
+Two rules keep this honest:
+
+- **An auth failure stops the self-heal ladder.** Retyping the launch command
+  cannot log anybody in, and a container restart re-runs a bootstrap that will
+  fail the same way — so `/livez` stays 200 and the pod is left up, carrying its
+  message, instead of crash-looping over it.
+- **The terminal must stay reachable.** ttyd outlives claude, so `/healthz`
+  reports `terminalReady` separately from `ready`, and `resolveTarget()` proxies
+  a not-ready pod whose ttyd is up. Gating the terminal on readiness would lock
+  the user out of the one place `/login` can be typed. The UI's Terminal button
+  follows `terminalReady`, not `ready`.
+
+The pane patterns are deliberately narrow (`AUTH_PATTERNS` in `agent.js`): a
+false positive marks a healthy workspace failed. They are only ever consulted
+while the bootstrap's `claude remote` is absent.
+
 ## Storage
 
 **One PVC per repo**, named `workspaceId(key)`, holding every branch:
@@ -214,6 +243,32 @@ The **config shell** runs inside the dashboard pod (`/config-tty/`, a localhost
 hop, so it opens instantly) with its own 1 Gi PVC as the working copy. S3 is the
 distribution artifact.
 
+### The shared-login watchdog
+
+`dashboard/lib/tokenCheck.js` re-reads the expiry of the config shell's
+`.credentials.json` every `TOKEN_CHECK_MS` (default 30 min) and the UI shows a
+banner for anything but a healthy verdict. This is the copy that every *new*
+workspace pulls at bootstrap, so when it goes bad the symptom is "every session
+I start from now on cannot log in".
+
+It is an **offline check of the token's own expiry claim**, on purpose. There is
+no stable endpoint that confirms an OAuth token without either spending tokens
+or *rotating the credential* — a refresh call issues a new token and invalidates
+this one, which would make the health check destructive. And a network probe
+would turn any upstream blip into a false alarm.
+
+| state | meaning |
+|---|---|
+| `valid` / `unknown` | nothing shown (`unknown` = no expiry claim to check) |
+| `expiring` | inside `TOKEN_WARN_MS` (default 24 h) of expiry **and** with no refresh token — a renewable token always expires within hours, and warning on that would pin the banner up permanently |
+| `stale` | expired but renewable: refresh tokens rotate, so the one in this copy may already have been consumed by a running pod and a new workspace pulling it can fail to log in — push from the config shell |
+| `expired` | expired with no refresh token: new workspaces cannot log in |
+| `missing` / `unreadable` | no credentials file, or not parseable |
+
+The verdict never contains the token itself, only `hasRefreshToken`. Live
+workspaces are covered separately by the agent's `auth-failed` stage, and by its
+`/auth` endpoint.
+
 ### `CONFIG_PUSH_POLICY`
 
 Set on the dashboard Deployment; propagated to workspace pods.
@@ -246,11 +301,12 @@ narrow TOCTOU window remains.)
 | `POST` | `/api/sessions` | **202** / 400 / **409** / 429 |
 | `DELETE` | `/api/sessions/:id` | 202; keeps the PVC unless `?deletePvc=true` |
 | `POST` | `/api/sessions/:id/restart` | 202 |
-| `GET` | `/api/sessions/:id/logs?tail=N` | `text/plain` |
+| `GET` | `/api/sessions/:id/logs?tail=N` | `text/plain`; the UI polls this into a per-card panel |
 | `GET` | `/api/workspaces` · `DELETE /api/workspaces/:name` · `POST /api/workspaces/prune` | PVC view |
 | `GET` | `/api/resources` | metrics-server, or `{source:"unavailable"}` with **200** |
 | `GET` | `/api/disk` | Per-PVC; live via the agent, else the `last-used-bytes` annotation |
 | `GET` | `/api/config/status` · `POST /api/config/push` | Config sync |
+| `GET` | `/api/config/token` | Shared-login watchdog verdict; `?fresh=1` re-checks now |
 | `ALL` | `/tty/:id/*`, `/config-tty/*` | Proxied (incl. WebSocket upgrade) |
 
 ## Kubernetes

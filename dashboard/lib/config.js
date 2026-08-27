@@ -71,6 +71,11 @@ module.exports = {
         return configPushPolicy === 'any' ? this.s3SecretRw : this.s3SecretRo;
     },
 
+    // Shared-login watchdog. Offline expiry check of the credentials the
+    // config shell holds and every new workspace pulls; 0 disables it.
+    tokenCheckMs: intEnv('TOKEN_CHECK_MS', 1800000),
+    tokenWarnMs: intEnv('TOKEN_WARN_MS', 86400000),
+
     sessionsCacheMs: intEnv('SESSIONS_CACHE_MS', 30000),
     pvcCacheMs: intEnv('PVC_CACHE_MS', 60000),
     targetCacheMs: intEnv('TARGET_CACHE_MS', 60000),
