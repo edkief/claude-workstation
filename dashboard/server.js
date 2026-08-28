@@ -14,6 +14,7 @@ const github = require('./lib/github');
 const agent = require('./lib/agentClient');
 const ttyProxy = require('./lib/ttyProxy');
 const tokenCheck = require('./lib/tokenCheck');
+const tokenRefresh = require('./lib/tokenRefresh');
 const { ValidationError, validateRepoFullName } = require('./lib/validate');
 const { isWorkspaceId } = require('./lib/naming');
 
@@ -119,8 +120,21 @@ app.get('/api/config/status', asyncRoute(async (req, res) => {
 // The token watchdog's latest verdict. Served from cache: the check reads a
 // file, but the UI polls this and there is no reason to stat it every second.
 app.get('/api/config/token', (req, res) => {
-    res.json(req.query.fresh === '1' ? tokenCheck.check() : tokenCheck.status());
+    const verdict = req.query.fresh === '1' ? tokenCheck.check() : tokenCheck.status();
+    res.json({ ...verdict, autoRefresh: tokenRefresh.state() });
 });
+
+// Run a maintenance pass now: adopt anything newer another holder published,
+// renew if due, publish if ours is the fresher copy. `?force=1` renews even
+// when the token is not yet due -- the manual button, and the thing to curl
+// when a login has gone bad.
+app.post('/api/config/token/refresh', asyncRoute(async (req, res) => {
+    const result = await tokenRefresh.maintain({
+        reason: 'manual', force: req.query.force === '1',
+    });
+    res.status(result.ok === false ? 500 : 200)
+       .json({ ...result, verdict: tokenCheck.status() });
+}));
 
 app.post('/api/config/push', asyncRoute(async (req, res) => {
     const result = await runConfigSync(['push', '--json']);
@@ -351,6 +365,7 @@ server.on('upgrade', async (req, socket, head) => {
 });
 
 tokenCheck.start();
+tokenRefresh.start();
 
 server.listen(cfg.port, () => {
     console.log(`[dashboard] listening on ${cfg.port}, namespace=${cfg.namespace}, ` +

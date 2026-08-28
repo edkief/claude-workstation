@@ -27,6 +27,7 @@ const EXTRA_READS = [
     'CONFIG_TTY_PORT',
     'S3_ENDPOINT', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'S3_BUCKET',
     'S3_REGION', 'S3_PROVIDER', 'S3_FORCE_PATH_STYLE', 'S3_PREFIX',
+    'AUTH_S3_BUCKET', 'AUTH_S3_KEY',
 ];
 
 test('dashboard/.env.example documents exactly what the code reads', () => {
@@ -34,7 +35,7 @@ test('dashboard/.env.example documents exactly what the code reads', () => {
     const source = fs.readFileSync(path.join(ROOT, 'dashboard', 'lib', 'config.js'), 'utf8');
 
     const read = new Set(EXTRA_READS);
-    for (const m of source.matchAll(/(?:intEnv|env)\('([A-Z0-9_]+)'/g)) read.add(m[1]);
+    for (const m of source.matchAll(/(?:intEnv|boolEnv|env)\('([A-Z0-9_]+)'/g)) read.add(m[1]);
 
     const undocumented = [...read].filter((v) => !documented.has(v));
     const unused = [...documented.keys()].filter((v) => !read.has(v));
@@ -70,6 +71,10 @@ test('dashboard/.env.example defaults match the code defaults', () => {
         PVC_TOUCH_MS: cfg.pvcTouchMs,
         TOKEN_CHECK_MS: cfg.tokenCheckMs,
         TOKEN_WARN_MS: cfg.tokenWarnMs,
+        TOKEN_TRIGGER_MS: cfg.tokenTriggerMs,
+        TOKEN_REFRESH_LEAD_MS: cfg.tokenRefreshLeadMs,
+        TOKEN_REFRESH_DEADLINE_MS: cfg.tokenRefreshDeadlineMs,
+        TOKEN_TRIGGER_TIMEOUT_MS: cfg.tokenTriggerTimeoutMs,
         CONFIG_PUSH_POLICY: cfg.configPushPolicy,
         CONFIG_S3_SECRET_RW: cfg.s3SecretRw,
         CONFIG_S3_SECRET_RO: cfg.s3SecretRo,
