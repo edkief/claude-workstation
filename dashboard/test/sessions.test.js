@@ -246,3 +246,46 @@ test('pod manifest: the auth object location is propagated, never re-defaulted',
     assert.equal(env.AUTH_S3_BUCKET, cfg.authS3Bucket);
     assert.equal(env.AUTH_S3_KEY, cfg.authS3Key);
 });
+
+// --------------------------------------------------- the in-card health panel
+
+// The panel exists to explain a workspace the badge cannot. So its three
+// "nothing to show" cases must stay distinguishable: collapsing them is how
+// you get back the permanent spinner this whole surface was built to kill.
+test('an unreachable agent explains itself instead of rendering as empty', () => {
+    const { healthEnvelope } = require('../lib/agentClient');
+
+    // Still scheduling, or waiting on an RWO volume to attach.
+    const noIp = healthEnvelope({ podIP: null, probe: null });
+    assert.equal(noIp.available, false);
+    assert.match(noIp.message, /no IP yet/);
+
+    // Has an IP but nothing answered: agent down, or NetworkPolicy said no.
+    const noAnswer = healthEnvelope({ podIP: '10.1.2.3', probe: null });
+    assert.equal(noAnswer.available, false);
+    assert.match(noAnswer.message, /10\.1\.2\.3:7682/);
+    assert.notEqual(noAnswer.message, noIp.message);
+
+    // Answered, but not with JSON -- something else is on that port.
+    const garbage = healthEnvelope({ podIP: '10.1.2.3', probe: { status: 200, body: null } });
+    assert.equal(garbage.available, false);
+    assert.match(garbage.message, /not JSON/);
+});
+
+// 503 with ready:false is the *normal* shape of a starting workspace, so the
+// probe status travels with the body: seeing both is what tells you the probe
+// itself is working rather than the pod being broken.
+test('a real probe is passed through untouched, status included', () => {
+    const { healthEnvelope } = require('../lib/agentClient');
+
+    const body = { ready: false, stage: 'auth-failed', terminalReady: true,
+                   reason: 'Claude OAuth token expired', detail: 'run /login' };
+    const env = healthEnvelope({ podIP: '10.1.2.3', probe: { status: 503, body } });
+
+    assert.equal(env.available, true);
+    assert.equal(env.probeStatus, 503);
+    assert.equal(env.podIP, '10.1.2.3');
+    // Untouched: the agent owns this schema and grows it, and anything the
+    // dashboard reshapes here is a field the panel silently stops showing.
+    assert.deepEqual(env.health, body);
+});

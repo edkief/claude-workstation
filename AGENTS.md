@@ -147,6 +147,14 @@ The pane patterns are deliberately narrow (`AUTH_PATTERNS` in `agent.js`): a
 false positive marks a healthy workspace failed. They are only ever consulted
 while the bootstrap's `claude remote` is absent.
 
+The card's status badge is the dashboard's *interpretation* of the probe; the
+**Health panel** beside Logs shows the probe itself, polled while open. It
+renders the agent's JSON as-is — the agent owns that schema and grows it, and
+anything reshaped here is a field the panel would silently stop showing. The
+three unreachable cases (no pod IP, no answer, an answer that is not JSON) stay
+distinct for the same reason the terminal is never gated on readiness: a
+workspace that cannot explain itself is the permanent spinner all over again.
+
 ## Storage
 
 **One PVC per repo**, named `workspaceId(key)`, holding every branch:
@@ -367,6 +375,7 @@ narrow TOCTOU window remains.)
 | `DELETE` | `/api/sessions/:id` | 202; keeps the PVC unless `?deletePvc=true` |
 | `POST` | `/api/sessions/:id/restart` | 202 |
 | `GET` | `/api/sessions/:id/logs?tail=N` | `text/plain`; the UI polls this into a per-card panel |
+| `GET` | `/api/sessions/:id/health` | The in-pod agent's `/healthz`, verbatim; always **200**, since "no answer" is a result to render |
 | `GET` | `/api/workspaces` · `DELETE /api/workspaces/:name` · `POST /api/workspaces/prune` | PVC view |
 | `GET` | `/api/resources` | metrics-server, or `{source:"unavailable"}` with **200** |
 | `GET` | `/api/disk` | Per-PVC; live via the agent, else the `last-used-bytes` annotation |

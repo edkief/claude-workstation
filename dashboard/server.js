@@ -241,6 +241,21 @@ app.get('/api/sessions/:id/logs', asyncRoute(async (req, res) => {
     }
 }));
 
+// The agent's own readiness answer, verbatim. The badge on a card is the
+// dashboard's *interpretation* of this; when the two disagree -- a Running pod
+// whose claude is gone, an auth failure Kubernetes has nothing to say about --
+// the raw probe is what explains the difference.
+//
+// Always 200: "the agent did not answer" is a result to render, not a
+// dashboard error, and the panel polls this.
+app.get('/api/sessions/:id/health', asyncRoute(async (req, res) => {
+    const pod = await k8s.getPod(req.params.id);
+    if (!pod) return res.status(404).json({ error: 'not_found', message: 'session not found' });
+    const podIP = pod.status?.podIP;
+    const probe = podIP ? await agent.agentGet(podIP, '/healthz') : null;
+    res.json(agent.healthEnvelope({ podIP, probe }));
+}));
+
 // --------------------------------------------------------------- workspaces
 
 /** Live disk numbers where a pod is running; annotation fallback otherwise. */
