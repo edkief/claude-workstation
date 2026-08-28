@@ -181,6 +181,24 @@ function rclone(args, { allowMissing = false } = {}) {
     }
 }
 
+/**
+ * `cat` of an object that may not exist yet.
+ *
+ * "Missing" reaches us in two different shapes, and only one of them is the
+ * documented exit 3/4: an S3-compatible server can also answer the GET in a
+ * way rclone reports as an *empty body with exit 0*. Reading that as data made
+ * every first-run `token push` die on `JSON.parse("")` with "Unexpected end of
+ * JSON input" -- an empty remote diagnosed as a corrupt one.
+ *
+ * Empty is safe to fold into missing here because every caller wants a JSON
+ * document, and a zero-byte object is not one. A real failure (auth, SigV4,
+ * TLS, DNS) still exits non-zero and throws inside rclone().
+ */
+function catMaybe(remote) {
+    const out = rclone(['cat', remote], { allowMissing: true });
+    return out === null || out.trim() === '' ? null : out;
+}
+
 const remotePath = (name) => `${REMOTE}:${BUCKET}/${PREFIX}/${name}`;
 const manifestPath = () => `${REMOTE}:${BUCKET}/manifest.json`;
 const authPath = () => `${REMOTE}:${AUTH_BUCKET}/${AUTH_KEY}`;
@@ -204,7 +222,7 @@ function writeJsonAtomic(file, value, mode) {
 
 /** null means the manifest is genuinely absent. Anything else throws. */
 function fetchRemoteManifest() {
-    const out = rclone(['cat', manifestPath()], { allowMissing: true });
+    const out = catMaybe(manifestPath());
     if (out === null) return null;
     try {
         return JSON.parse(out);
@@ -322,17 +340,38 @@ function parseTokenObject(doc, where) {
     };
 }
 
-/** null means the auth object is genuinely absent. Anything else throws. */
-function fetchRemoteToken() {
-    const out = rclone(['cat', authPath()], { allowMissing: true });
+/**
+ * null means the auth object is genuinely absent. Anything else throws --
+ * unless `tolerateInvalid`, which downgrades "there is an object there but it
+ * is not a token document" to `{ invalid: true }`.
+ *
+ * That distinction is what keeps the remote from bricking itself. A truncated
+ * write, a hand-created placeholder, or an object from some future shape would
+ * otherwise fail the shape check on *every* future push, so the one operation
+ * that could repair the remote is the one operation refused. Readers stay
+ * strict: adopting a document we cannot parse is how a bad login spreads.
+ */
+function fetchRemoteToken({ tolerateInvalid = false } = {}) {
+    const out = catMaybe(authPath());
     if (out === null) return null;
     let doc;
     try {
         doc = JSON.parse(out);
     } catch (err) {
-        throw new Error(`${authPath()} is not valid JSON: ${err.message}`);
+        if (!tolerateInvalid) {
+            throw new Error(`${authPath()} is not valid JSON: ${err.message}`);
+        }
+        log(`WARN: ${authPath()} is not valid JSON (${err.message}); replacing it`);
+        return { invalid: true, generation: 0, expiresAt: 0 };
     }
-    return parseTokenObject(doc, authPath());
+    try {
+        return parseTokenObject(doc, authPath());
+    } catch (err) {
+        if (!tolerateInvalid) throw err;
+        log(`WARN: ${err.message}; replacing it`);
+        // Keep the counter monotone even across a document we could not read.
+        return { invalid: true, generation: Number(doc.generation) || 0, expiresAt: 0 };
+    }
 }
 
 /**
@@ -385,9 +424,12 @@ function tokenPush({ force = false } = {}) {
     }
     // Throws rather than returning null on an unreachable remote, for the same
     // reason push() does: a null here would skip the comparison below and turn
-    // the publish into a blind overwrite.
-    const remote = fetchRemoteToken();
-    if (!force && remote && !isFresher(local.expiresAt, remote.expiresAt)) {
+    // the publish into a blind overwrite. An object that is present but not a
+    // token document is tolerated instead -- there is nothing there to protect,
+    // and refusing would leave the remote unrepairable.
+    const remote = fetchRemoteToken({ tolerateInvalid: true });
+    if (!force && remote && !remote.invalid
+        && !isFresher(local.expiresAt, remote.expiresAt)) {
         return { pushed: false, reason: 'remote token is at least as fresh',
                  remoteGeneration: remote.generation };
     }
@@ -456,7 +498,7 @@ function pullLegacyCredentials(manifest) {
     if (!manifest || !manifest.entries || !manifest.entries[LEGACY_CREDENTIALS_ENTRY]) {
         return false;
     }
-    const body = rclone(['cat', remotePath(LEGACY_CREDENTIALS_ENTRY)], { allowMissing: true });
+    const body = catMaybe(remotePath(LEGACY_CREDENTIALS_ENTRY));
     if (body === null) return false;
 
     let doc;
@@ -807,7 +849,7 @@ if (require.main === module) main();
 module.exports = {
     stripClaudeJson, mergeClaudeJson, isConfigured, rcloneConfigBody, isMissing,
     isFresher, parseTokenObject, authPath, localCredentials, writeCredentials,
-    tokenPull, tokenPush, tokenStatus,
+    tokenPull, tokenPush, tokenStatus, fetchRemoteToken,
     STRIP_KEYS, STRIP_PATTERNS, ADDITIVE, FILES, LEGACY_CREDENTIALS_ENTRY,
     CREDENTIALS_FILE, TOKEN_STATE_FILE,
 };

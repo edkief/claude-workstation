@@ -217,3 +217,85 @@ test('the auth object defaults into the config bucket and is redirectable', () =
     assert.equal(run({ S3_BUCKET: 'claude-config', AUTH_S3_BUCKET: 'claude-auth' }),
         'cfg:claude-auth/auth/token.json');
 });
+
+// A first `token push` runs against a bucket with no auth object at all, and
+// "missing" does not always arrive as rclone's exit 4: the server can answer
+// the GET in a way rclone reports as an empty body with exit 0. Reading that
+// as data made the very first push fail with "Unexpected end of JSON input",
+// and the obvious workaround -- hand-creating `{}` on the bucket -- then failed
+// forever with "carries no OAuth access token", since the shape check refused
+// the one operation that could have repaired the object.
+test('token push works against an empty and against a junk remote object', () => {
+    const fs = require('node:fs');
+    const os = require('node:os');
+
+    const run = (remoteBody) => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tokenpush-'));
+        const bin = path.join(dir, 'bin');
+        fs.mkdirSync(bin);
+        fs.mkdirSync(path.join(dir, '.claude'));
+        fs.writeFileSync(path.join(dir, '.claude', '.credentials.json'), JSON.stringify(
+            { claudeAiOauth: { accessToken: 'a', refreshToken: 'r', expiresAt: 9000 } }));
+        // rclone stands in for the remote: `cat` replays a fixture, `copyto`
+        // captures what would have been published.
+        fs.writeFileSync(path.join(bin, 'rclone'), [
+            '#!/bin/sh',
+            // rclone is called as: rclone --config <f> <op> <args...>',
+            'op=$3; src=$4',
+            `[ "$op" = cat ] && printf '%s' "$REMOTE_BODY" && exit 0`,
+            `[ "$op" = copyto ] && cp "$src" "${path.join(dir, 'published.json')}" && exit 0`,
+            'exit 0',
+        ].join('\n'), { mode: 0o755 });
+
+        const out = execFileSync(process.execPath,
+            ['-e', 'process.stdout.write(JSON.stringify(require(process.argv[1]).tokenPush({})))',
+             MODULE],
+            { encoding: 'utf8',
+              env: { ...process.env, HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude'),
+                     PATH: `${bin}:${process.env.PATH}`, REMOTE_BODY: remoteBody,
+                     S3_ENDPOINT: 'http://s3.test', S3_ACCESS_KEY_ID: 'k',
+                     S3_SECRET_ACCESS_KEY: 's' } });
+        return { result: JSON.parse(out),
+                 published: JSON.parse(fs.readFileSync(path.join(dir, 'published.json'), 'utf8')) };
+    };
+
+    for (const [label, body] of [['absent', ''], ['junk', '{}'], ['tokenless', '{"generation":7}']]) {
+        const { result, published } = run(body);
+        assert.equal(result.pushed, true, `${label} remote must not block the push`);
+        assert.equal(published.credentials.claudeAiOauth.accessToken, 'a');
+        // The counter stays monotone even across a document we could not read.
+        assert.equal(result.generation, body === '{"generation":7}' ? 8 : 1, label);
+    }
+});
+
+// The reader stays strict where the writer is lenient: adopting a document we
+// cannot parse is how one bad login spreads to every workspace.
+test('an unreadable auth object is absent to a pull, never adopted', () => {
+    const fs = require('node:fs');
+    const os = require('node:os');
+
+    const run = (remoteBody) => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tokenpull-'));
+        const bin = path.join(dir, 'bin');
+        fs.mkdirSync(bin);
+        fs.writeFileSync(path.join(bin, 'rclone'),
+            `#!/bin/sh\nprintf '%s' "$REMOTE_BODY"\n`, { mode: 0o755 });
+        return execFileSync(process.execPath,
+            ['-e', `const s = require(process.argv[1]);
+                    try { process.stdout.write(JSON.stringify(s.tokenPull({}))); }
+                    catch (e) { process.stdout.write(JSON.stringify({ error: e.message })); }`,
+             MODULE],
+            { encoding: 'utf8',
+              env: { ...process.env, HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude'),
+                     PATH: `${bin}:${process.env.PATH}`, REMOTE_BODY: remoteBody,
+                     S3_ENDPOINT: 'http://s3.test', S3_ACCESS_KEY_ID: 'k',
+                     S3_SECRET_ACCESS_KEY: 's' } });
+    };
+
+    // Empty reads as "no object yet", which is what lets a bootstrap fall back
+    // to the legacy bundled credentials instead of failing.
+    assert.deepEqual(JSON.parse(run('')), { adopted: false, reason: 'no remote token object' });
+    // Present but unusable is an error, not silent adoption of nothing.
+    assert.match(JSON.parse(run('{}')).error, /no OAuth access token/);
+    assert.match(JSON.parse(run('not json')).error, /not valid JSON/);
+});

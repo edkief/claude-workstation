@@ -225,7 +225,11 @@ everything else (SigV4 mismatch from a wrong `S3_REGION`, `AccessDenied`, TLS,
 DNS, no such bucket) is a real error and must surface. Collapsing the two made
 `pull` print *no remote config found; nothing to pull* and exit **0** on an auth
 failure, and made `push` skip its version check — a null manifest reads as an
-empty remote — and clobber whatever was there. Three rules follow:
+empty remote — and clobber whatever was there. Missing does not always
+arrive as an exit code, though: the server can answer a `cat` for an absent
+key with an *empty body and exit 0*, so `catMaybe()` folds empty into
+missing (every caller wants JSON; a zero-byte object is not JSON). Three
+rules follow:
 
 - `manifest.json` lives at the bucket **root**, entries under `S3_PREFIX`.
   Objects under the prefix with no manifest is a broken remote, not an empty
@@ -321,6 +325,11 @@ trust dialog, which non-interactively is a hang.
 
 Two things follow that are easy to get wrong:
 
+- **Writers tolerate an unreadable auth object; readers never do.** A
+  truncated write or a hand-created placeholder would otherwise fail the
+  shape check on every future `token push`, so the one operation that could
+  repair the remote is the one refused. `push` overwrites it (keeping the
+  generation counter monotone); `pull` still errors rather than adopt it.
 - **`token push` is not gated on `CONFIG_PUSH_POLICY`.** A workspace forced to
   refresh must be able to publish even under `dashboard`, or the rotation is
   lost and every later pull hands out a dead refresh token. The gate is the S3
