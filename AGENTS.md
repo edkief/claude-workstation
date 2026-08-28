@@ -44,6 +44,7 @@ which is the reason this design replaced the previous single-pod one.
 | `dashboard/lib/ttyProxy.js` | Pod-IP resolution + HTTP/WebSocket proxying |
 | `dashboard/lib/k8s.js` | Client, `TtlCache`, error helpers |
 | `dashboard/lib/metrics.js` | `metrics.k8s.io` with graceful degradation |
+| `dashboard/lib/tokenRefresh.js` | Renews the shared login and publishes it |
 | `dashboard/prune-pvcs.js` | PVC pruner, run by a CronJob |
 | `dashboard/public/index.html` | Single-file UI, no build step |
 | `workspace/entrypoint.sh` | Bootstrap: secrets → config pull → clone → seed → supervisord |
@@ -102,6 +103,9 @@ carry real meaning — never `{ok:true}` for "the agent process is alive".
 
 The ladder, after `$WORKSPACE_STATE_DIR/ready` exists:
 
+0. If the failure looks like a login, the agent first pulls the shared token:
+   another holder may have published one since this pod booted, and adopting it
+   clears the failure with no restart.
 1. `/healthz` → 503, stage `session-lost` (surfaced as *Claude session lost;
    relaunching…*).
 2. The agent retypes the launch command into the pane, `WORKSPACE_RELAUNCH_MAX`
@@ -180,7 +184,7 @@ viable. A **curated allowlist** (~8 MB) is synced instead:
 
 | Synced | Never synced |
 |---|---|
-| `.credentials.json`, `settings.json`, `CLAUDE.md` | `projects/`, `sessions/`, `session-env/`, `tasks/` |
+| `settings.json`, `CLAUDE.md` | `projects/`, `sessions/`, `session-env/`, `tasks/` |
 | `skills/`, `plugins/`, `agents/`, `commands/` | `shell-snapshots/`, `history.jsonl`, `cache/` |
 | `.claude.json` (**stripped**, see below) | `uploads/`, `telemetry/`, `backups/`, `file-history/` |
 
@@ -190,10 +194,19 @@ cache keys are stripped (`projects`, `machineID`, `userID`, `cached*`, `*Cache`,
 merged *over* the local one and `projects` is preserved, so each pod keeps the
 trust entry that lets Claude start without a dialog.
 
+**The OAuth token is not in the bundle.** It rotates on its own every few
+hours, and inside a version-counted bundle every refresh bumps
+`manifest.json`, so everybody else's `push` fails the staleness check (exit 3)
+for a change they never made. It lives in its own object with its own
+generation counter — `AUTH_S3_BUCKET`/`AUTH_S3_KEY`, defaulting to
+`<S3_BUCKET>/auth/token.json` — and a plain `pull` merges it back into
+`~/.claude`, so a workspace bootstrap is still one command.
+
 ```bash
-claude-config-sync pull     # workspace entrypoint, dashboard boot
+claude-config-sync pull     # workspace entrypoint, dashboard boot (config + token)
 claude-config-sync push     # after editing in the config shell
 claude-config-sync status   # local vs remote divergence
+claude-config-sync token pull|push|status
 ```
 
 Exit codes: `0` ok, `1` error, `3` stale (remote moved since your last pull),
@@ -243,7 +256,7 @@ The **config shell** runs inside the dashboard pod (`/config-tty/`, a localhost
 hop, so it opens instantly) with its own 1 Gi PVC as the working copy. S3 is the
 distribution artifact.
 
-### The shared-login watchdog
+### The shared login: watchdog, and keeping it fresh
 
 `dashboard/lib/tokenCheck.js` re-reads the expiry of the config shell's
 `.credentials.json` every `TOKEN_CHECK_MS` (default 30 min) and the UI shows a
@@ -251,17 +264,69 @@ banner for anything but a healthy verdict. This is the copy that every *new*
 workspace pulls at bootstrap, so when it goes bad the symptom is "every session
 I start from now on cannot log in".
 
-It is an **offline check of the token's own expiry claim**, on purpose. There is
-no stable endpoint that confirms an OAuth token without either spending tokens
-or *rotating the credential* — a refresh call issues a new token and invalidates
-this one, which would make the health check destructive. And a network probe
-would turn any upstream blip into a false alarm.
+The check itself is an **offline read of the token's own expiry claim**, on
+purpose: a network probe would turn any upstream blip into a false alarm, and
+the only endpoint that could confirm the token *rotates* it.
+
+#### Whoever refreshes publishes
+
+That rotation is also why reporting alone was not enough. Refresh tokens
+rotate, so when any holder renews, every other copy — including the one new
+workspaces bootstrap from — is dead. Preventing pods from renewing is not
+possible; claude renews on its own schedule inside a session nothing here
+drives. So the invariant is not "one designated refresher" but:
+
+> **whoever refreshes publishes, and everyone else adopts the newest.**
+
+Nobody has to win a race, which is what makes the whole thing cheap:
+
+| | does |
+|---|---|
+| `tokenRefresh.js` (dashboard, every `TOKEN_TRIGGER_MS`, default 10 min) | adopt anything newer; renew if inside `TOKEN_REFRESH_LEAD_MS`; publish if ours is fresher |
+| `agent.js` (each workspace, off the readiness probe, ≥ `WORKSPACE_TOKEN_SYNC_MS`) | adopt anything newer; publish a renewal claude made in this pod |
+
+Adoption is decided by `expiresAt`, never by the generation counter: expiry is
+monotone under refresh, so a newer generation carrying an older token is a
+regression. The counter only orders writes.
+
+The dashboard renews by **running Claude Code**, not by calling the OAuth
+endpoint. The direct call's one advantage is choosing the moment, which would
+matter only if it had to get there first; what is left is an undocumented
+endpoint and a hardcoded client id guarding a credential whose corruption locks
+every workspace out at once. Two rungs, both supported surfaces:
+
+1. `claude -p /usage` — reaches the backend (it returns live plan-usage
+   figures, which cannot come from a cache; `claude auth status` by contrast is
+   served from `.claude.json`'s cached `oauthAccount` and never touches the
+   network) while invoking no model, so it spends no tokens and consumes none
+   of the session quota it reports.
+2. a one-line prompt — an unambiguous model call, for the case where `/usage`
+   turns out not to exercise the auth path. It costs tokens, so it only fires
+   within `TOKEN_REFRESH_DEADLINE_MS` of expiry.
+
+Nothing in the dashboard writes the credentials file: it runs a trigger and
+checks whether `expiresAt` advanced — the write is Claude Code's own. A failed
+trigger is therefore harmless, and `TOKEN_AUTO_REFRESH=0` restores exactly the
+report-only behaviour. `claude` is run from a pre-trusted scratch directory
+(`TOKEN_REFRESH_DIR`), because `-p` in an untrusted directory blocks on the
+trust dialog, which non-interactively is a hang.
+
+Two things follow that are easy to get wrong:
+
+- **`token push` is not gated on `CONFIG_PUSH_POLICY`.** A workspace forced to
+  refresh must be able to publish even under `dashboard`, or the rotation is
+  lost and every later pull hands out a dead refresh token. The gate is the S3
+  key's permissions on `AUTH_S3_BUCKET` — a *bucket*, because Garage grants key
+  permissions per bucket and a prefix cannot express "may publish a token, may
+  not touch the config".
+- **`TOKEN_REFRESH_LEAD_MS` is clamped to twice `TOKEN_TRIGGER_MS`**, or a
+  token can slide from "not yet due" to expired between two passes.
 
 | state | meaning |
 |---|---|
 | `valid` / `unknown` | nothing shown (`unknown` = no expiry claim to check) |
 | `expiring` | inside `TOKEN_WARN_MS` (default 24 h) of expiry **and** with no refresh token — a renewable token always expires within hours, and warning on that would pin the banner up permanently |
-| `stale` | expired but renewable: refresh tokens rotate, so the one in this copy may already have been consumed by a running pod and a new workspace pulling it can fail to log in — push from the config shell |
+| `stale` | expired but renewable: normally transient now, since the next pass renews and publishes it; persistent `stale` means the refresh loop is failing |
 | `expired` | expired with no refresh token: new workspaces cannot log in |
 | `missing` / `unreadable` | no credentials file, or not parseable |
 
@@ -306,7 +371,8 @@ narrow TOCTOU window remains.)
 | `GET` | `/api/resources` | metrics-server, or `{source:"unavailable"}` with **200** |
 | `GET` | `/api/disk` | Per-PVC; live via the agent, else the `last-used-bytes` annotation |
 | `GET` | `/api/config/status` · `POST /api/config/push` | Config sync |
-| `GET` | `/api/config/token` | Shared-login watchdog verdict; `?fresh=1` re-checks now |
+| `GET` | `/api/config/token` | Watchdog verdict + auto-refresh state; `?fresh=1` re-checks now |
+| `POST` | `/api/config/token/refresh` | Run a maintenance pass now; `?force=1` renews even when not due |
 | `ALL` | `/tty/:id/*`, `/config-tty/*` | Proxied (incl. WebSocket upgrade) |
 
 ## Kubernetes
