@@ -12,6 +12,11 @@
  *   claude-config-sync push     strip + upload
  *   claude-config-sync status   local vs remote divergence
  *
+ * The OAuth token is deliberately NOT part of that bundle -- see the token
+ * section below:
+ *
+ *   claude-config-sync token pull|push|status
+ *
  * Exit codes: 0 ok, 1 error, 2 usage, 3 stale (remote moved since your last pull),
  * 4 push forbidden by CONFIG_PUSH_POLICY.
  */
@@ -32,13 +37,33 @@ const BUCKET = process.env.S3_BUCKET || 'claude-config';
 const PREFIX = process.env.S3_PREFIX || 'config';
 const REMOTE = 'cfg';
 
+// The OAuth token lives in its own object, outside the version-counted config
+// bundle. It rotates every few hours on its own; inside the bundle every
+// refresh would bump manifest.json's version and make everybody else's push
+// fail the staleness check (exit 3) for a change they did not make.
+//
+// It defaults to the config bucket so an existing deployment keeps working
+// with the credentials it already has. Point AUTH_S3_BUCKET at a separate
+// bucket to give it a different write policy from the config: Garage grants
+// key permissions per *bucket*, so a prefix cannot express "workspaces may
+// publish a token refresh but may not touch settings".
+const AUTH_BUCKET = process.env.AUTH_S3_BUCKET || BUCKET;
+const AUTH_KEY = process.env.AUTH_S3_KEY || 'auth/token.json';
+
 /** Single files copied verbatim. */
 const FILES = [
     { local: CLAUDE_JSON, remote: 'claude.json', merge: 'json' },
     { local: path.join(CLAUDE_DIR, 'settings.json'), remote: 'settings.json' },
-    { local: path.join(CLAUDE_DIR, '.credentials.json'), remote: 'credentials.json', mode: 0o600 },
     { local: path.join(CLAUDE_DIR, 'CLAUDE.md'), remote: 'CLAUDE.md' },
 ];
+
+const CREDENTIALS_FILE = path.join(CLAUDE_DIR, '.credentials.json');
+const TOKEN_STATE_FILE = path.join(CLAUDE_DIR, '.token-sync-state.json');
+
+// Before the split the token was entry #3 of FILES. `pull` still reads that
+// entry when no auth object exists yet, so a remote written by an older
+// version keeps logging workspaces in until the first token push migrates it.
+const LEGACY_CREDENTIALS_ENTRY = 'credentials.json';
 
 /** Directories shipped as tarballs. */
 const DIRS = ['skills', 'plugins', 'agents', 'commands'];
@@ -158,6 +183,7 @@ function rclone(args, { allowMissing = false } = {}) {
 
 const remotePath = (name) => `${REMOTE}:${BUCKET}/${PREFIX}/${name}`;
 const manifestPath = () => `${REMOTE}:${BUCKET}/manifest.json`;
+const authPath = () => `${REMOTE}:${AUTH_BUCKET}/${AUTH_KEY}`;
 
 // ------------------------------------------------------------------- helpers
 
@@ -233,9 +259,251 @@ function assertMayPush(entries) {
     return entries;
 }
 
+
+// ----------------------------------------------------------------- the token
+
+/**
+ * The shared OAuth login, synced separately from the config bundle.
+ *
+ * The invariant the whole design rests on is not "one designated refresher"
+ * but:
+ *
+ *     whoever refreshes publishes, and everyone else adopts the newest.
+ *
+ * Refresh tokens rotate: when a pod renews, the copy everyone else holds is
+ * dead. Trying to stop pods from refreshing is unenforceable -- claude renews
+ * on its own schedule, inside a container we do not drive. Letting the renewal
+ * be *published* by whoever performed it is enforceable, and repairs the fork
+ * instead of preventing it.
+ *
+ * Adoption is decided by `expiresAt`, not by the generation counter. Expiry is
+ * monotone under refresh (each renewal buys another lifetime), so a newer
+ * generation carrying an older token is a regression, never an update. The
+ * counter exists only to order writes.
+ *
+ * Deliberately NOT gated on CONFIG_PUSH_POLICY. A workspace that was forced to
+ * refresh must be able to publish it even under `dashboard`, or the rotation
+ * is lost and every later pull hands out a dead refresh token. The gate is the
+ * S3 key's permissions on AUTH_S3_BUCKET, which is why that is a bucket and
+ * not a prefix.
+ */
+
+/**
+ * The single comparison both directions use. Strictly newer wins, so an equal
+ * expiry is a no-op rather than a pointless rewrite of the shared login.
+ */
+function isFresher(candidate, current) {
+    return (Number(candidate) || 0) > (Number(current) || 0);
+}
+
+/** The local credentials file, or null when absent/unparseable/tokenless. */
+function localCredentials(file = CREDENTIALS_FILE) {
+    const doc = readJson(file, null);
+    if (!doc) return null;
+    const oauth = doc.claudeAiOauth || doc.oauth || null;
+    if (!oauth || !oauth.accessToken) return null;
+    return { doc, oauth, expiresAt: Number(oauth.expiresAt) || 0 };
+}
+
+/** Shape-check a candidate token doc. Returns the normalised form or throws. */
+function parseTokenObject(doc, where) {
+    const creds = doc && doc.credentials;
+    const oauth = creds && (creds.claudeAiOauth || creds.oauth);
+    if (!oauth || !oauth.accessToken) {
+        throw new Error(`${where} carries no OAuth access token`);
+    }
+    return {
+        generation: Number(doc.generation) || 0,
+        expiresAt: Number(doc.expiresAt) || Number(oauth.expiresAt) || 0,
+        updatedAt: doc.updatedAt || null,
+        updatedBy: doc.updatedBy || null,
+        hasRefreshToken: Boolean(oauth.refreshToken),
+        credentials: creds,
+    };
+}
+
+/** null means the auth object is genuinely absent. Anything else throws. */
+function fetchRemoteToken() {
+    const out = rclone(['cat', authPath()], { allowMissing: true });
+    if (out === null) return null;
+    let doc;
+    try {
+        doc = JSON.parse(out);
+    } catch (err) {
+        throw new Error(`${authPath()} is not valid JSON: ${err.message}`);
+    }
+    return parseTokenObject(doc, authPath());
+}
+
+/**
+ * Replace the local credentials, keeping one generation of history.
+ *
+ * This file is the shared login: a bad write locks every workspace out at
+ * once, and the rotated refresh token it replaces cannot be recovered from
+ * anywhere else. `.credentials.json.prev` is the one cheap undo available.
+ */
+function writeCredentials(doc) {
+    if (fs.existsSync(CREDENTIALS_FILE)) {
+        const prev = `${CREDENTIALS_FILE}.prev`;
+        fs.copyFileSync(CREDENTIALS_FILE, prev);
+        fs.chmodSync(prev, 0o600);
+    }
+    writeJsonAtomic(CREDENTIALS_FILE, doc, 0o600);
+}
+
+function recordTokenState(t) {
+    writeJsonAtomic(TOKEN_STATE_FILE, {
+        generation: t.generation,
+        expiresAt: t.expiresAt,
+        syncedAt: new Date().toISOString(),
+        updatedBy: t.updatedBy || null,
+    });
+}
+
+function tokenPull({ force = false } = {}) {
+    const remote = fetchRemoteToken();
+    if (!remote) return { adopted: false, reason: 'no remote token object' };
+
+    const local = localCredentials();
+    if (!force && !isFresher(remote.expiresAt, local?.expiresAt)) {
+        return { adopted: false, reason: 'local token is at least as fresh',
+                 remoteGeneration: remote.generation };
+    }
+
+    writeCredentials(remote.credentials);
+    recordTokenState(remote);
+    log(`adopted shared token generation ${remote.generation}`
+        + ` (expires ${new Date(remote.expiresAt).toISOString()})`);
+    return { adopted: true, generation: remote.generation,
+             expiresAt: new Date(remote.expiresAt).toISOString() };
+}
+
+function tokenPush({ force = false } = {}) {
+    const local = localCredentials();
+    if (!local) {
+        throw new Error(`no OAuth token in ${CREDENTIALS_FILE} to push`);
+    }
+    // Throws rather than returning null on an unreachable remote, for the same
+    // reason push() does: a null here would skip the comparison below and turn
+    // the publish into a blind overwrite.
+    const remote = fetchRemoteToken();
+    if (!force && remote && !isFresher(local.expiresAt, remote.expiresAt)) {
+        return { pushed: false, reason: 'remote token is at least as fresh',
+                 remoteGeneration: remote.generation };
+    }
+
+    // Compare-and-swap on a counter, not an atomic S3 precondition -- the same
+    // narrow TOCTOU window the config manifest carries.
+    const generation = (remote ? remote.generation : 0) + 1;
+    const body = {
+        generation,
+        expiresAt: local.expiresAt,
+        updatedAt: new Date().toISOString(),
+        updatedBy: process.env.POD_NAME || os.hostname(),
+        credentials: local.doc,
+    };
+    const tmp = path.join(os.tmpdir(), `token.${process.pid}.json`);
+    writeJsonAtomic(tmp, body, 0o600);
+    try {
+        rclone(['copyto', tmp, authPath()]);
+    } finally {
+        try { fs.unlinkSync(tmp); } catch { /* gone */ }
+    }
+    recordTokenState({ ...body, updatedBy: body.updatedBy });
+    log(`published token generation ${generation}`
+        + ` (expires ${new Date(local.expiresAt).toISOString()})`);
+    return { pushed: true, generation,
+             expiresAt: new Date(local.expiresAt).toISOString() };
+}
+
+/** Never returns the token itself -- only what can be said about it. */
+function tokenStatus() {
+    let remote = null;
+    let remoteError = null;
+    if (isConfigured()) {
+        try {
+            remote = fetchRemoteToken();
+        } catch (err) {
+            remoteError = err.message;
+        }
+    }
+    const local = localCredentials();
+    const state = readJson(TOKEN_STATE_FILE, {});
+    const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
+
+    return {
+        configured: isConfigured(),
+        remoteError,
+        remotePath: authPath(),
+        remoteGeneration: remote ? remote.generation : 0,
+        remoteExpiresAt: iso(remote && remote.expiresAt),
+        remoteUpdatedBy: remote ? remote.updatedBy : null,
+        localExpiresAt: iso(local && local.expiresAt),
+        localHasRefreshToken: Boolean(local && local.oauth.refreshToken),
+        syncedGeneration: state.generation || 0,
+        syncedAt: state.syncedAt || null,
+        // What a pull/push would do right now, without doing it.
+        behind: Boolean(remote && local && remote.expiresAt > local.expiresAt),
+        ahead: Boolean(local && (!remote || local.expiresAt > remote.expiresAt)),
+    };
+}
+
+/**
+ * The pre-split remote kept the token as entry #3 of the config bundle. Used
+ * only when no auth object exists, and only when it is actually fresher.
+ */
+function pullLegacyCredentials(manifest) {
+    if (!manifest || !manifest.entries || !manifest.entries[LEGACY_CREDENTIALS_ENTRY]) {
+        return false;
+    }
+    const body = rclone(['cat', remotePath(LEGACY_CREDENTIALS_ENTRY)], { allowMissing: true });
+    if (body === null) return false;
+
+    let doc;
+    try {
+        doc = JSON.parse(body);
+    } catch (err) {
+        log(`WARN: legacy ${LEGACY_CREDENTIALS_ENTRY} is not valid JSON: ${err.message}`);
+        return false;
+    }
+    const oauth = doc.claudeAiOauth || doc.oauth || null;
+    if (!oauth || !oauth.accessToken) return false;
+
+    const local = localCredentials();
+    if (!isFresher(oauth.expiresAt, local?.expiresAt)) return false;
+
+    writeCredentials(doc);
+    log(`pulled the legacy bundled credentials; run 'claude-config-sync token push'`
+        + ' to migrate them to the auth object');
+    return true;
+}
+
+/**
+ * Merge the separately-stored token back into ~/.claude at pull time, so a
+ * workspace bootstrap stays a single `claude-config-sync pull`.
+ *
+ * Warns rather than throws: a token problem must not turn an otherwise good
+ * config pull into a failed bootstrap, and a workspace that cannot log in is
+ * already reported by the agent's `auth-failed` stage with a better message
+ * than a dead entrypoint would give.
+ */
+function syncTokenOnPull(manifest) {
+    try {
+        const result = tokenPull();
+        if (result.adopted) return { token: 'adopted' };
+        if (result.reason === 'no remote token object') {
+            return { token: pullLegacyCredentials(manifest) ? 'legacy' : 'none' };
+        }
+        return { token: 'current' };
+    } catch (err) {
+        log(`WARN: token pull failed: ${err.message}`);
+        return { token: 'error', tokenError: err.message };
+    }
+}
+
 // ---------------------------------------------------------------------- pull
 
-function pull() {
+function pull({ withToken = true } = {}) {
     const remote = fetchRemoteManifest();
     if (!remote) {
         // The manifest lives at the bucket ROOT; the entries live under
@@ -250,7 +518,9 @@ function pull() {
                 + `pulled until a push (or k8s/seed-config-job.yaml) writes the manifest.`);
         }
         log(`no remote config found at ${manifestPath()}; nothing to pull`);
-        return { pulled: [], version: 0 };
+        // The auth object is independent of the bundle: an empty config remote
+        // is no reason to leave the workspace logged out.
+        return { pulled: [], version: 0, ...(withToken ? syncTokenOnPull(null) : {}) };
     }
 
     fs.mkdirSync(CLAUDE_DIR, { recursive: true });
@@ -309,16 +579,18 @@ function pull() {
         });
     }
 
+    const tokenResult = withToken ? syncTokenOnPull(remote) : {};
+
     log(`pulled ${pulled.length} entr${pulled.length === 1 ? 'y' : 'ies'} (version ${remote.version || 0})`);
     if (missing.length) {
         const err = new Error(
             `incomplete pull: ${missing.join(', ')} listed in the manifest but absent from `
             + `${REMOTE}:${BUCKET}/${PREFIX}/ -- local version left at its previous value`);
         err.exitCode = 1;
-        err.partial = { pulled, missing, version: remote.version || 0 };
+        err.partial = { pulled, missing, version: remote.version || 0, ...tokenResult };
         throw err;
     }
-    return { pulled, version: remote.version || 0 };
+    return { pulled, version: remote.version || 0, ...tokenResult };
 }
 
 // ---------------------------------------------------------------------- push
@@ -461,12 +733,18 @@ function main() {
     jsonMode = argv.includes('--json');
     const force = argv.includes('--force');
 
+    const sub = argv[1];
+
     if (!cmd || ['-h', '--help', 'help'].includes(cmd)) {
-        console.log('usage: claude-config-sync <pull|push|status> [--json] [--force]');
+        console.log('usage: claude-config-sync <pull|push|status> [--json] [--force] [--no-token]');
+        console.log('       claude-config-sync token <pull|push|status> [--json] [--force]');
         process.exit(cmd ? 0 : 2);
     }
 
-    if (!isConfigured() && cmd !== 'status') {
+    // `status` is the command you run to find out why the remote is broken, so
+    // it must work with no S3 configuration at all. Same for `token status`.
+    const isStatus = cmd === 'status' || (cmd === 'token' && sub === 'status');
+    if (!isConfigured() && !isStatus) {
         const msg = 'S3 is not configured (set S3_ENDPOINT, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY)';
         if (jsonMode) console.log(JSON.stringify({ error: msg }, null, 2));
         else console.error(`error: ${msg}`);
@@ -475,12 +753,34 @@ function main() {
 
     try {
         let result;
-        if (cmd === 'pull') result = pull();
+        if (cmd === 'pull') result = pull({ withToken: !argv.includes('--no-token') });
         else if (cmd === 'push') result = push({ force });
         else if (cmd === 'status') result = status();
-        else { console.error(`unknown command: ${cmd}`); process.exit(2); }
+        else if (cmd === 'token') {
+            if (sub === 'pull') result = tokenPull({ force });
+            else if (sub === 'push') result = tokenPush({ force });
+            else if (sub === 'status') result = tokenStatus();
+            else {
+                console.error(`usage: claude-config-sync token <pull|push|status>`);
+                process.exit(2);
+            }
+        } else { console.error(`unknown command: ${cmd}`); process.exit(2); }
 
         if (jsonMode) console.log(JSON.stringify(result, null, 2));
+        else if (cmd === 'token' && sub === 'status') {
+            console.log(`remote object  : ${result.remotePath}`);
+            console.log(`remote gen     : ${result.remoteGeneration}`
+                + (result.remoteExpiresAt ? `  (expires ${result.remoteExpiresAt})` : ''));
+            console.log(`remote updated : ${result.remoteUpdatedBy || 'never'}`);
+            console.log(`local  expires : ${result.localExpiresAt || 'no local token'}`);
+            console.log(`refresh token  : ${result.localHasRefreshToken ? 'present' : 'absent'}`);
+            console.log(`synced gen     : ${result.syncedGeneration}`
+                + (result.syncedAt ? `  at ${result.syncedAt}` : ''));
+            if (!result.configured) console.log('S3             : not configured');
+            if (result.remoteError) console.log(`remote error   : ${result.remoteError}`);
+            if (result.behind) console.log('state          : behind -- run `token pull`');
+            if (result.ahead) console.log('state          : ahead  -- run `token push`');
+        }
         else if (cmd === 'status') {
             console.log(`remote version : ${result.remoteVersion}`);
             console.log(`local  version : ${result.localVersion}` +
@@ -506,5 +806,8 @@ if (require.main === module) main();
 
 module.exports = {
     stripClaudeJson, mergeClaudeJson, isConfigured, rcloneConfigBody, isMissing,
-    STRIP_KEYS, STRIP_PATTERNS, ADDITIVE,
+    isFresher, parseTokenObject, authPath, localCredentials, writeCredentials,
+    tokenPull, tokenPush, tokenStatus,
+    STRIP_KEYS, STRIP_PATTERNS, ADDITIVE, FILES, LEGACY_CREDENTIALS_ENTRY,
+    CREDENTIALS_FILE, TOKEN_STATE_FILE,
 };

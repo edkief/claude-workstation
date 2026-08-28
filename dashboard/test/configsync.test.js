@@ -3,7 +3,12 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const sync = require('../../shared/claude-config-sync/claude-config-sync');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+
+const MODULE = path.join(__dirname, '..', '..', 'shared', 'claude-config-sync',
+                         'claude-config-sync');
+const sync = require(MODULE);
 
 test('push strips machine-specific and cache keys from .claude.json', () => {
     const local = {
@@ -142,4 +147,73 @@ test('only rclone not-found is treated as a missing object', () => {
     assert.equal(sync.isMissing(5, 'temporary error: connection refused'), false);
     assert.equal(sync.isMissing(7, 'fatal error'), false);
     assert.equal(sync.isMissing(null, 'spawn rclone ENOENT'), false);
+});
+
+// ---------------------------------------------------------------- the token
+
+// The OAuth token used to be entry #3 of the bundle. It rotates every few
+// hours on its own, so every refresh bumped manifest.json's version and made
+// everyone else's push fail the staleness check for a change they did not
+// make. Keeping it out is the point of the split.
+test('the config bundle no longer carries the OAuth token', () => {
+    const names = sync.FILES.map((f) => f.remote);
+    assert.deepEqual(names, ['claude.json', 'settings.json', 'CLAUDE.md']);
+    assert.ok(!names.includes(sync.LEGACY_CREDENTIALS_ENTRY),
+        'credentials must not ride in the version-counted bundle');
+});
+
+// Expiry, not the generation counter, decides adoption: expiry is monotone
+// under refresh, so a newer generation carrying an older token is a
+// regression. Equal is a no-op, never a rewrite of the shared login.
+test('only a strictly fresher token is adopted or published', () => {
+    assert.equal(sync.isFresher(2000, 1000), true);
+    assert.equal(sync.isFresher(1000, 1000), false);
+    assert.equal(sync.isFresher(1000, 2000), false);
+    // No local token at all: anything real beats nothing.
+    assert.equal(sync.isFresher(1000, undefined), true);
+    assert.equal(sync.isFresher(1000, null), true);
+    // A malformed candidate never wins.
+    assert.equal(sync.isFresher(undefined, 1000), false);
+    assert.equal(sync.isFresher('nonsense', 1000), false);
+});
+
+test('a token object without a usable access token is rejected, not adopted', () => {
+    const good = {
+        generation: 4, expiresAt: 1700,
+        credentials: { claudeAiOauth: { accessToken: 'a', refreshToken: 'r', expiresAt: 1700 } },
+    };
+    const parsed = sync.parseTokenObject(good, 'test');
+    assert.equal(parsed.generation, 4);
+    assert.equal(parsed.expiresAt, 1700);
+    assert.equal(parsed.hasRefreshToken, true);
+
+    for (const bad of [{}, { credentials: {} }, { credentials: { claudeAiOauth: {} } },
+        { credentials: { claudeAiOauth: { refreshToken: 'r' } } }]) {
+        assert.throws(() => sync.parseTokenObject(bad, 'test'), /no OAuth access token/);
+    }
+});
+
+test('expiresAt falls back to the token claim when the envelope omits it', () => {
+    const parsed = sync.parseTokenObject(
+        { credentials: { claudeAiOauth: { accessToken: 'a', expiresAt: 99 } } }, 'test');
+    assert.equal(parsed.expiresAt, 99);
+    assert.equal(parsed.generation, 0);
+    assert.equal(parsed.hasRefreshToken, false);
+});
+
+test('the auth object defaults into the config bucket and is redirectable', () => {
+    const run = (env) => execFileSync(process.execPath,
+        ['-e', "process.stdout.write(require(process.argv[1]).authPath())", MODULE],
+        { encoding: 'utf8', env: { ...process.env, ...env } });
+
+    // Default: same bucket, so an existing deployment keeps working with the
+    // credentials it already has.
+    assert.equal(run({ S3_BUCKET: 'claude-config', AUTH_S3_BUCKET: '', AUTH_S3_KEY: '' }),
+        'cfg:claude-config/auth/token.json');
+
+    // Garage grants key permissions per bucket, not per prefix -- a separate
+    // bucket is the only way to let workspaces publish a token refresh while
+    // staying read-only on the config.
+    assert.equal(run({ S3_BUCKET: 'claude-config', AUTH_S3_BUCKET: 'claude-auth' }),
+        'cfg:claude-auth/auth/token.json');
 });
