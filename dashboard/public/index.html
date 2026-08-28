@@ -525,6 +525,8 @@
     <span id="token-banner-text"></span>
     <span class="token-actions">
       <a class="btn btn-ghost btn-sm" href="/config-tty/" target="_blank">Config shell</a>
+      <button class="btn btn-ghost btn-sm" id="token-refresh-btn"
+              onclick="refreshToken()">Refresh now</button>
       <button class="btn btn-ghost btn-sm" onclick="loadTokenStatus(true)">Re-check</button>
     </span>
   </div>
@@ -1420,14 +1422,24 @@ async function pushConfig() {
 }
 
 // --- shared Claude token watchdog -------------------------------------------
-// The dashboard re-checks the shared login on a timer; this only renders its
-// verdict. An expired shared token breaks every *new* workspace, which used to
-// show up only as a session stuck on "starting Claude…".
+// The dashboard re-checks the shared login on a timer and now also renews it;
+// this only renders the verdict. An expired shared token breaks every *new*
+// workspace, which used to show up only as a session stuck on "starting Claude…".
 const TOKEN_TONE = {
   valid: null, unknown: null,
   expiring: 'warn', stale: 'warn',
   expired: 'bad', missing: 'bad', unreadable: 'bad',
 };
+
+// A renewal that failed is worth saying even while the token still works: it
+// only ever fires inside the refresh window, so it means the token really is
+// close to expiry and the automation could not save it. Nothing is shown for
+// a healthy loop -- a permanent banner is a banner people stop reading.
+function autoRefreshNote(auto) {
+  if (!auto || !auto.last || auto.last.ok !== false) return null;
+  if (auto.last.action === 'disabled') return null;
+  return `auto-refresh ${auto.last.action}: ${auto.last.message || 'see dashboard logs'}`;
+}
 
 async function loadTokenStatus(fresh = false) {
   const banner = document.getElementById('token-banner');
@@ -1435,15 +1447,36 @@ async function loadTokenStatus(fresh = false) {
   if (!banner) return;
   try {
     const d = await fetch(`/api/config/token${fresh ? '?fresh=1' : ''}`).then(r => r.json());
-    const tone = TOKEN_TONE[d.state];
+    const note = autoRefreshNote(d.autoRefresh);
+    const tone = TOKEN_TONE[d.state] || (note ? 'warn' : null);
     if (!tone) {
       banner.className = 'token-banner';
       return;
     }
     banner.className = `token-banner show ${tone}`;
-    text.textContent = `Claude login: ${d.message || d.state}`;
+    text.textContent = [TOKEN_TONE[d.state] ? `Claude login: ${d.message || d.state}` : null, note]
+      .filter(Boolean).join(' — ');
   } catch {
     banner.className = 'token-banner';
+  }
+}
+
+// Forced: renew even when the token is not yet due. The button exists for the
+// case where you want to know *now* whether the automation still works,
+// rather than finding out at expiry.
+async function refreshToken() {
+  const btn = document.getElementById('token-refresh-btn');
+  const text = document.getElementById('token-banner-text');
+  if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+  try {
+    const r = await fetch('/api/config/token/refresh?force=1', { method: 'POST' });
+    const d = await r.json();
+    if (text && d.action) text.textContent = `Claude login: ${d.message || d.action}`;
+  } catch (e) {
+    if (text) text.textContent = `Claude login: refresh request failed (${e.message})`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Refresh now'; }
+    loadTokenStatus(true);
   }
 }
 
