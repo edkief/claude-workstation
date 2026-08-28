@@ -81,6 +81,9 @@ module.exports = {
     // Two S3 users are provisioned up front so CONFIG_PUSH_POLICY can be
     // flipped without creating new cluster objects.
     s3SecretRw: env('CONFIG_S3_SECRET_RW', 'claude-config-s3-rw'),
+    // Empty means "the config bucket". Held here only to hand on to pods.
+    authS3Bucket: env('AUTH_S3_BUCKET', ''),
+    authS3Key: env('AUTH_S3_KEY', 'auth/token.json'),
     s3SecretRo: env('CONFIG_S3_SECRET_RO', 'claude-config-s3-ro'),
     configPushPolicy,
 

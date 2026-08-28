@@ -100,6 +100,12 @@ function buildWorkspacePodManifest({
                     { name: 'TTY_BASE_PATH', value: `/tty/${id}` },
                     { name: 'CLAUDE_CODE_VERSION', value: cfg.claudeCodeVersion },
                     { name: 'CONFIG_PUSH_POLICY', value: cfg.configPushPolicy },
+                    // Where the shared OAuth token lives. Propagated rather
+                    // than defaulted per-pod: a dashboard pointing at a
+                    // separate auth bucket and pods still reading the config
+                    // one would silently split the login in two.
+                    { name: 'AUTH_S3_BUCKET', value: cfg.authS3Bucket },
+                    { name: 'AUTH_S3_KEY', value: cfg.authS3Key },
                     { name: 'POD_NAME', valueFrom: { fieldRef: { fieldPath: 'metadata.name' } } },
                     {
                         name: 'GITHUB_TOKEN',

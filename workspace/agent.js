@@ -16,7 +16,7 @@
 
 const http = require('http');
 const fs = require('fs');
-const { execFileSync } = require('child_process');
+const { execFileSync, execFile } = require('child_process');
 
 const PORT = Number(process.env.AGENT_PORT || 7682);
 // Bootstrap state lives in a uid-1000-owned dir on the container layer:
@@ -45,10 +45,21 @@ const SELF_HEAL = process.env.WORKSPACE_SELF_HEAL !== '0';
 const RELAUNCH_MAX = Number(process.env.WORKSPACE_RELAUNCH_MAX || 3);
 const RELAUNCH_BACKOFF_MS = Number(process.env.WORKSPACE_RELAUNCH_BACKOFF_MS || 30000);
 
+// Shared-login sync. See maintainToken().
+const TOKEN_SYNC = process.env.WORKSPACE_TOKEN_SYNC !== '0';
+const TOKEN_SYNC_MS = Number(process.env.WORKSPACE_TOKEN_SYNC_MS || 300000);
+// Floor for the forced sync an auth failure asks for, so a pod that cannot log
+// in spawns rclone every 30s rather than on every probe.
+const TOKEN_SYNC_FORCE_MS = 30000;
+
 let missingSince = null;   // first probe that saw the session gone
 let relaunches = 0;
 let lastRelaunchAt = 0;
 let launchingSince = null; // first probe that saw stage=starting without claude
+let tokenSyncAt = 0;
+let tokenSyncRunning = false;
+let tokenSyncError = null;
+let lastTokenSync = { at: null, adopted: false, published: false, error: null };
 
 /**
  * Terminal failures a *login* fixes. Claude prints these and exits (or sits at
@@ -185,6 +196,57 @@ function paneAuthFailure(pane) {
  */
 const CRED_GRACE_MS = 30000;
 
+/**
+ * Keep this pod's copy of the shared login in step with S3.
+ *
+ * Two directions, and the second is the one that matters. Refresh tokens
+ * rotate: when claude in *this* pod renews, the copy every other holder has --
+ * including the one every new workspace bootstraps from -- is dead. Publishing
+ * the renewal is what repairs that. Preventing pods from refreshing is not an
+ * option; claude renews on its own schedule, inside a session we do not drive.
+ * So the rule is the same everywhere: whoever refreshes publishes, and
+ * everyone else adopts the newest.
+ *
+ * Driven off the readiness probe rather than its own timer -- the kubelet is
+ * already calling every few seconds, and a second clock is one more thing to
+ * get wrong. Fire-and-forget, so a slow bucket never delays a probe.
+ *
+ * `token push` is a no-op unless this pod's copy is strictly fresher, so the
+ * usual cost of a pass is two reads. Under a read-only S3 key the push fails;
+ * that is logged once per distinct error rather than every five minutes, and
+ * is the reason AUTH_S3_BUCKET exists as a separate bucket.
+ */
+function maintainToken(force = false) {
+    if (!TOKEN_SYNC || !process.env.S3_ENDPOINT) return;
+    if (tokenSyncRunning) return;
+    if (Date.now() - tokenSyncAt < (force ? TOKEN_SYNC_FORCE_MS : TOKEN_SYNC_MS)) return;
+    tokenSyncAt = Date.now();
+    tokenSyncRunning = true;
+
+    const parse = (out) => { try { return JSON.parse(out); } catch { return {}; } };
+    const opts = { timeout: 60000, encoding: 'utf8' };
+
+    execFile('claude-config-sync', ['token', 'pull', '--json'], opts, (pullErr, pullOut) => {
+        const adopted = Boolean(parse(pullOut).adopted);
+        if (adopted) console.log('[agent] adopted a newer shared token from S3');
+
+        execFile('claude-config-sync', ['token', 'push', '--json'], opts, (pushErr, pushOut) => {
+            tokenSyncRunning = false;
+            const published = Boolean(parse(pushOut).pushed);
+            if (published) console.log('[agent] published this pod\'s token refresh to S3');
+
+            const err = pullErr || pushErr;
+            const message = err ? String(err.message).split('\n')[0].slice(0, 200) : null;
+            // Same failure every five minutes is noise; a new one is news.
+            if (message && message !== tokenSyncError) {
+                console.warn(`[agent] token sync: ${message}`);
+            }
+            tokenSyncError = message;
+            lastTokenSync = { at: new Date().toISOString(), adopted, published, error: message };
+        });
+    });
+}
+
 function authFailure(absentForMs = Infinity, pane = capturePane()) {
     const hit = paneAuthFailure(pane);
     if (hit) {
@@ -194,6 +256,10 @@ function authFailure(absentForMs = Infinity, pane = capturePane()) {
 
     const creds = credentials();
     if (!creds.present) {
+        // Step 0 of the ladder: another holder may have published a login
+        // since this pod bootstrapped. Ask for it now -- the next probe
+        // re-evaluates, and an adopted token clears this without a restart.
+        maintainToken(true);
         return {
             reason: 'no Claude credentials in this workspace',
             detail: `${CREDENTIALS_FILE} is missing; run /login in the terminal, then `
@@ -201,6 +267,7 @@ function authFailure(absentForMs = Infinity, pane = capturePane()) {
         };
     }
     if (creds.expired && !creds.hasRefreshToken) {
+        maintainToken(true);
         return {
             reason: 'Claude OAuth token expired',
             detail: `token expired ${new Date(creds.expiresAt).toISOString()} and carries no `
@@ -379,6 +446,7 @@ function session() {
         stage: readFile(STAGE_FILE) || 'starting',
         claudeConnected: health().ready,
         credentials: credentials(),
+        tokenSync: lastTokenSync,
     };
 }
 
@@ -400,6 +468,8 @@ http.createServer((req, res) => {
     }
 
     if (path === '/healthz') {
+        // Throttled and fire-and-forget: the probe answers from local state.
+        maintainToken();
         const h = health();
         return send(res, h.ready ? 200 : 503, h);
     }

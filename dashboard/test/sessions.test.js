@@ -227,3 +227,22 @@ test('a bootstrap still in progress is not turned into a failure', () => {
         assert.equal(s.authFailed, false, stage);
     }
 });
+
+// A dashboard pointing at a separate auth bucket while pods still read the
+// config one would split the shared login in two: the dashboard's renewals
+// would never reach a workspace, and a workspace's would never reach the
+// dashboard. Both sides must be told the same place.
+test('pod manifest: the auth object location is propagated, never re-defaulted', () => {
+    const cfg = require('../lib/config');
+    const manifest = buildWorkspacePodManifest({
+        id: 'claude-ws-x-0badf00d', key: 'github.com/e/r',
+        repoUrl: 'git@github.com:e/r.git', repoFullName: 'e/r',
+        branch: 'main', baseBranch: 'main', sessionName: 'r-main',
+        pvcName: 'claude-ws-x-0badf00d',
+    });
+    const env = Object.fromEntries(
+        manifest.spec.containers[0].env.filter((e) => 'value' in e).map((e) => [e.name, e.value]));
+
+    assert.equal(env.AUTH_S3_BUCKET, cfg.authS3Bucket);
+    assert.equal(env.AUTH_S3_KEY, cfg.authS3Key);
+});

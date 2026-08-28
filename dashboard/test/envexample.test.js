@@ -76,6 +76,8 @@ test('dashboard/.env.example defaults match the code defaults', () => {
         TOKEN_REFRESH_DEADLINE_MS: cfg.tokenRefreshDeadlineMs,
         TOKEN_TRIGGER_TIMEOUT_MS: cfg.tokenTriggerTimeoutMs,
         CONFIG_PUSH_POLICY: cfg.configPushPolicy,
+        AUTH_S3_BUCKET: cfg.authS3Bucket,
+        AUTH_S3_KEY: cfg.authS3Key,
         CONFIG_S3_SECRET_RW: cfg.s3SecretRw,
         CONFIG_S3_SECRET_RO: cfg.s3SecretRo,
     };
