@@ -2,7 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
@@ -69,6 +70,24 @@ test('a strip/merge round-trip is stable and keeps the local trust map', () => {
     assert.deepEqual(merged.projects, { '/workspace/main': { hasTrustDialogAccepted: true } });
     assert.ok(!('machineID' in merged), 'author machine id must not leak to consumers');
     assert.deepEqual(sync.stripClaudeJson(merged), published);
+});
+
+test('an atomic write follows a symlink instead of replacing it', () => {
+    // ~/.claude.json is a symlink onto the PVC. rename(2) replaces the link,
+    // so a naive atomic write leaves a container-layer file and the pulled
+    // auth is lost on the next pod start.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'configsync-'));
+    const target = path.join(dir, 'claude.json');
+    const link = path.join(dir, '.claude.json');
+    fs.writeFileSync(target, '{}');
+    fs.symlinkSync(target, link);
+
+    sync.writeJsonAtomic(link, { oauthAccount: { emailAddress: 'a@b.c' } });
+
+    assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the symlink must survive');
+    assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf8')),
+        { oauthAccount: { emailAddress: 'a@b.c' } });
+    fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('additive push policy covers exactly the extension directories', () => {

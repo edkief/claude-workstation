@@ -213,11 +213,29 @@ function readJson(file, fallback) {
     try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
 
+/**
+ * Resolve a symlink to the file it points at.
+ *
+ * ~/.claude.json in a workspace pod is a symlink onto the PVC, and rename(2)
+ * replaces the *link*, not its target. An atomic write straight to `file`
+ * would therefore drop a plain file on the container layer, and every later
+ * token refresh would be lost on the next pod start. Missing paths (and
+ * non-links) come back unchanged.
+ */
+function resolveLink(file) {
+    try { return fs.realpathSync(file); } catch { return file; }
+}
+
+function writeThroughAtomic(file, body, mode) {
+    const target = resolveLink(file);
+    const tmp = `${target}.tmp-${process.pid}`;
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(tmp, body, mode ? { mode } : undefined);
+    fs.renameSync(tmp, target);
+}
+
 function writeJsonAtomic(file, value, mode) {
-    const tmp = `${file}.tmp-${process.pid}`;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(tmp, JSON.stringify(value, null, 2), mode ? { mode } : undefined);
-    fs.renameSync(tmp, file);
+    writeThroughAtomic(file, JSON.stringify(value, null, 2), mode);
 }
 
 /** null means the manifest is genuinely absent. Anything else throws. */
@@ -586,10 +604,7 @@ function pull({ withToken = true } = {}) {
             const incoming = JSON.parse(body);
             writeJsonAtomic(entry.local, mergeClaudeJson(local, incoming));
         } else {
-            const tmp = `${entry.local}.tmp-${process.pid}`;
-            fs.mkdirSync(path.dirname(entry.local), { recursive: true });
-            fs.writeFileSync(tmp, body, entry.mode ? { mode: entry.mode } : undefined);
-            fs.renameSync(tmp, entry.local);
+            writeThroughAtomic(entry.local, body, entry.mode);
         }
         pulled.push(entry.remote);
     }
@@ -849,7 +864,7 @@ if (require.main === module) main();
 module.exports = {
     stripClaudeJson, mergeClaudeJson, isConfigured, rcloneConfigBody, isMissing,
     isFresher, parseTokenObject, authPath, localCredentials, writeCredentials,
-    tokenPull, tokenPush, tokenStatus, fetchRemoteToken,
+    tokenPull, tokenPush, tokenStatus, fetchRemoteToken, writeJsonAtomic,
     STRIP_KEYS, STRIP_PATTERNS, ADDITIVE, FILES, LEGACY_CREDENTIALS_ENTRY,
     CREDENTIALS_FILE, TOKEN_STATE_FILE,
 };

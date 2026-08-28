@@ -174,6 +174,42 @@ test('agent bootstrap stage beats the raw k8s reason in the UI message', () => {
     assert.equal(s.message, 'cloning repository…');
 });
 
+test('a failed stage carries the agent detail, not just the label', () => {
+    const p = pod({
+        status: {
+            phase: 'Running',
+            podIP: '10.1.2.3',
+            conditions: [{ type: 'Ready', status: 'False' }],
+            containerStatuses: [{ state: { running: {} } }],
+        },
+    });
+    const s = describePod(p, {
+        agentHealth: {
+            ready: false,
+            stage: 'failed',
+            detail: 'bash: claude: command not found',
+        },
+    });
+    assert.equal(s.status, 'failed');
+    assert.match(s.message, /workspace bootstrap failed/);
+    assert.match(s.message, /claude: command not found/);
+});
+
+test('a progress stage stays a clean label even when the agent sends a pane tail', () => {
+    const p = pod({
+        status: {
+            phase: 'Running',
+            podIP: '10.1.2.3',
+            conditions: [{ type: 'Ready', status: 'False' }],
+            containerStatuses: [{ state: { running: {} } }],
+        },
+    });
+    const s = describePod(p, {
+        agentHealth: { ready: false, stage: 'starting', detail: 'ubuntu@pod:~$ ' },
+    });
+    assert.equal(s.message, 'starting Claude…');
+});
+
 test('without an agent, the pod Warning event explains a stuck Pending', () => {
     const p = pod({ status: { phase: 'Pending', containerStatuses: [{ state: { waiting: {} } }] } });
     const s = describePod(p, {

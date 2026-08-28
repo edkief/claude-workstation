@@ -1,6 +1,11 @@
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+# Kubelet/CRI does not derive HOME from the image's USER the way `docker run`
+# does, so without this the entrypoint (and the tmux server it starts, and
+# therefore claude) can run with HOME unset. supervisord pins HOME for its
+# own children; nothing pinned it for the bootstrap.
+ENV HOME=/home/ubuntu
 ENV NVM_DIR=/home/ubuntu/.nvm
 ENV RUSTUP_HOME=/home/ubuntu/.rustup
 ENV CARGO_HOME=/home/ubuntu/.cargo
@@ -58,13 +63,17 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
     && rustup target add wasm32-unknown-unknown \
     && cargo install wasm-pack
 
-# Symlink nvm-managed binaries into /usr/local/bin so supervisord (no .bashrc) can find them
+# Symlink nvm-managed binaries into /usr/local/bin so supervisord (no .bashrc)
+# and the byobu login shell (which reads .bash_profile, not nvm.sh) can find
+# them. `claude` especially: entrypoint.sh types it into the tmux pane, and a
+# `claude: command not found` there is invisible until the pod never goes ready.
 USER root
 RUN . "$NVM_DIR/nvm.sh" \
     && ln -s "$(which node)" /usr/local/bin/node \
     && ln -s "$(which npm)"  /usr/local/bin/npm \
     && ln -s "$(which npx)"  /usr/local/bin/npx \
-    && ln -s "$(which pnpm)" /usr/local/bin/pnpm
+    && ln -s "$(which pnpm)" /usr/local/bin/pnpm \
+    && ln -s "$(which claude)" /usr/local/bin/claude
 RUN ln -s /home/ubuntu/.cargo/bin/cargo     /usr/local/bin/cargo \
     && ln -s /home/ubuntu/.cargo/bin/rustc  /usr/local/bin/rustc \
     && ln -s /home/ubuntu/.cargo/bin/rustup /usr/local/bin/rustup \

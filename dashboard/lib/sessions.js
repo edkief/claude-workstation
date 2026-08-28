@@ -111,12 +111,15 @@ function describePod(pod, { agentHealth = null, warning = null } = {}) {
     let message = null;
     if (agentHealth?.stage && FATAL_STAGES.has(agentHealth.stage)) {
         // The agent knows the actual reason ("Claude OAuth token expired");
-        // a pod-level reason here would only say "Running".
-        message = [stageLabel(agentHealth.stage), agentHealth.reason]
-            .filter(Boolean).join(' — ');
+        // a pod-level reason here would only say "Running". Stages that carry
+        // no `reason` (e.g. the bare 'failed' stage) fall back to the pane
+        // tail in `detail` via stageMessage.
+        message = agentHealth.reason
+            ? [stageLabel(agentHealth.stage), agentHealth.reason].filter(Boolean).join(' — ')
+            : stageMessage(agentHealth);
     } else if (status === 'starting') {
         message = agentHealth?.stage
-            ? stageLabel(agentHealth.stage)
+            ? stageMessage(agentHealth)
             : (warning ? `${warning.reason}: ${warning.message}` : podReason(pod));
     } else if (status === 'failed') {
         message = warning ? `${warning.reason}: ${warning.message}`
@@ -154,6 +157,26 @@ function describePod(pod, { agentHealth = null, warning = null } = {}) {
         terminalUrl: `/tty/${pod.metadata.name}/`,
         limits: limitsFromPod(pod),
     };
+}
+
+/** Stages whose whole point is the reason, so the detail is the message. */
+const DETAILED_STAGES = new Set(['failed', 'session-lost']);
+
+/**
+ * The stage label, plus whatever the agent knows about *why*.
+ *
+ * The label alone is a dead end for the failure stages: "workspace bootstrap
+ * failed" with no detail sends you to `kubectl exec` to read the pane the agent
+ * had already captured. The agent's `detail` is a tail of that pane (or of the
+ * entrypoint's error file), so pass it through.
+ */
+function stageMessage({ stage, detail }) {
+    const label = stageLabel(stage);
+    // Progress stages are self-explanatory, and their detail is a live tail of
+    // the pane -- appending it would make the message flicker every poll.
+    if (!detail || !DETAILED_STAGES.has(stage)) return label;
+    const line = String(detail).split('\n').filter(Boolean).pop();
+    return line ? `${label} — ${line}` : label;
 }
 
 function stageLabel(stage) {
