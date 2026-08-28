@@ -251,9 +251,9 @@
     display: inline-block; font-size: .68rem; padding: .1rem .4rem; border-radius: 4px;
     background: var(--warning-soft); color: var(--warning); margin-left: .4rem;
   }
-  /* ---------- In-card log panel ---------- */
-  .logs-panel { border-top: 1px solid var(--border); margin-top: .2rem; }
-  .logs-panel > summary {
+  /* ---------- In-card collapsible panels (logs, health) ---------- */
+  .card-panel { border-top: 1px solid var(--border); margin-top: .2rem; }
+  .card-panel > summary {
     cursor: pointer;
     list-style: none;
     font-size: .76rem;
@@ -264,26 +264,26 @@
     gap: .45rem;
     user-select: none;
   }
-  .logs-panel > summary::-webkit-details-marker { display: none; }
-  .logs-panel > summary::before {
+  .card-panel > summary::-webkit-details-marker { display: none; }
+  .card-panel > summary::before {
     content: "▸";
     font-size: .7rem;
     transition: transform .12s;
   }
-  .logs-panel[open] > summary::before { transform: rotate(90deg); }
-  .logs-panel > summary:hover { color: var(--text); }
-  .logs-status { margin-left: auto; font-size: .7rem; color: var(--text-subtle); }
-  .logs-toolbar {
+  .card-panel[open] > summary::before { transform: rotate(90deg); }
+  .card-panel > summary:hover { color: var(--text); }
+  .panel-status { margin-left: auto; font-size: .7rem; color: var(--text-subtle); }
+  .panel-toolbar {
     display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
     font-size: .72rem; color: var(--text-muted); padding: .35rem 0;
   }
-  .logs-toolbar label { display: flex; align-items: center; gap: .3rem; }
-  .logs-toolbar select {
+  .panel-toolbar label { display: flex; align-items: center; gap: .3rem; }
+  .panel-toolbar select {
     font-size: .72rem; padding: .1rem .25rem;
     background: var(--surface); color: var(--text);
     border: 1px solid var(--border); border-radius: 4px;
   }
-  .logs-output {
+  .panel-output {
     font-family: var(--font-mono);
     font-size: .72rem;
     line-height: 1.45;
@@ -851,9 +851,17 @@ function makeSessionCard(s) {
         <button class="btn btn-danger btn-sm" onclick="terminateSession('${escHtml(s.id)}')">Terminate</button>
       </div>
     </div>
-    <details class="logs-panel" data-role="logs">
-      <summary>Logs<span class="logs-status" data-role="logs-status"></span></summary>
-      <div class="logs-toolbar">
+    <details class="card-panel" data-role="health">
+      <summary>Health<span class="panel-status" data-role="health-status"></span></summary>
+      <div class="panel-toolbar">
+        <label><input type="checkbox" data-role="health-auto" checked> Auto-refresh</label>
+        <a href="/api/sessions/${encodeURIComponent(s.id)}/health" target="_blank">Open raw</a>
+      </div>
+      <pre class="panel-output" data-role="health-output">Loading health…</pre>
+    </details>
+    <details class="card-panel" data-role="logs">
+      <summary>Logs<span class="panel-status" data-role="logs-status"></span></summary>
+      <div class="panel-toolbar">
         <label><input type="checkbox" data-role="logs-auto" checked> Auto-refresh</label>
         <label>Lines
           <select data-role="logs-tail">
@@ -865,9 +873,9 @@ function makeSessionCard(s) {
         </label>
         <a href="/api/sessions/${encodeURIComponent(s.id)}/logs?tail=500" target="_blank">Open raw</a>
       </div>
-      <pre class="logs-output" data-role="logs-output">Loading logs…</pre>
+      <pre class="panel-output" data-role="logs-output">Loading logs…</pre>
     </details>`;
-  wireLogPanel(card, s.id);
+  wirePanels(card, s.id);
   return card;
 }
 
@@ -925,7 +933,7 @@ function renderSessions(sessions) {
 
   const currentIds = new Set(sessions.map(s => s.id));
   for (const [id, card] of existing) {
-    if (!currentIds.has(id)) { stopLogPoll(id); card.remove(); }
+    if (!currentIds.has(id)) { stopPolls(id); card.remove(); }
   }
 }
 
@@ -935,40 +943,96 @@ function openTerminal(id) {
   window.open(s ? s.terminalUrl : `/tty/${encodeURIComponent(id)}/`, '_blank');
 }
 
-// --- In-card logs ---
-// A panel rather than a new tab: the point of these logs is to watch a session
-// that is starting or stuck, right next to the status that made you look.
-const LOG_POLL_MS = 3_000;
-const logTimers = new Map();
+// --- In-card panels: logs and health ---
+// Panels rather than new tabs: the point of both is to watch a session that is
+// starting or stuck, right next to the status that made you look. They poll
+// only while open, so a collapsed card costs nothing.
+const POLL_MS = { logs: 3_000, health: 5_000 };
+const pollTimers = new Map();
+const pollKey = (id, role) => `${id}:${role}`;
 
-function wireLogPanel(card, id) {
-  const panel = card.querySelector('[data-role="logs"]');
-  const auto = card.querySelector('[data-role="logs-auto"]');
-  const tail = card.querySelector('[data-role="logs-tail"]');
+function stopPoll(id, role) {
+  clearTimeout(pollTimers.get(pollKey(id, role)));
+  pollTimers.delete(pollKey(id, role));
+}
 
+function stopPolls(id) { for (const role of Object.keys(POLL_MS)) stopPoll(id, role); }
+
+function wirePanel(card, id, role, refresh) {
+  const panel = card.querySelector(`[data-role="${role}"]`);
+  const auto = card.querySelector(`[data-role="${role}-auto"]`);
   panel.addEventListener('toggle', () => {
-    if (panel.open) refreshLogs(card, id, { schedule: true });
-    else stopLogPoll(id);
+    if (panel.open) refresh(card, id, { schedule: true });
+    else stopPoll(id, role);
   });
   auto.addEventListener('change', () => {
-    stopLogPoll(id);
-    if (panel.open) refreshLogs(card, id, { schedule: true });
+    stopPoll(id, role);
+    if (panel.open) refresh(card, id, { schedule: true });
   });
+}
+
+function schedulePoll(card, id, role, refresh) {
+  const panel = card.querySelector(`[data-role="${role}"]`);
+  const auto = card.querySelector(`[data-role="${role}-auto"]`);
+  stopPoll(id, role);
+  if (!panel.open || !card.isConnected || !auto.checked) return;
+  pollTimers.set(pollKey(id, role),
+                 setTimeout(() => refresh(card, id, { schedule: true }), POLL_MS[role]));
+}
+
+function wirePanels(card, id) {
+  wirePanel(card, id, 'health', refreshHealth);
+  wirePanel(card, id, 'logs', refreshLogs);
+
+  const tail = card.querySelector('[data-role="logs-tail"]');
   tail.addEventListener('change', () => {
-    const link = card.querySelector('.logs-toolbar a');
+    const panel = card.querySelector('[data-role="logs"]');
+    const link = panel.querySelector('.panel-toolbar a');
     if (link) link.href = `/api/sessions/${encodeURIComponent(id)}/logs?tail=${tail.value}`;
     if (panel.open) refreshLogs(card, id, { schedule: true });
   });
 }
 
-function stopLogPoll(id) {
-  clearTimeout(logTimers.get(id));
-  logTimers.delete(id);
+// The summary line answers the question you opened the panel with, so the
+// common case never requires reading the JSON.
+function healthSummary(d) {
+  if (!d.available) return 'unreachable';
+  const h = d.health || {};
+  return [
+    h.ready ? 'ready' : 'not ready',
+    h.stage,
+    h.terminalReady ? 'terminal up' : 'terminal down',
+  ].filter(Boolean).join(' \u00b7 ');
+}
+
+// Rendered as raw JSON on purpose. The agent owns this schema and grows it
+// (tokenSync, relaunch counts); a field-by-field view here would quietly drop
+// whatever the pod started reporting since this file was last touched.
+async function refreshHealth(card, id, { schedule = false } = {}) {
+  const panel = card.querySelector('[data-role="health"]');
+  if (!panel || !panel.open || !card.isConnected) return stopPoll(id, 'health');
+
+  const out = card.querySelector('[data-role="health-output"]');
+  const statusEl = card.querySelector('[data-role="health-status"]');
+
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(id)}/health`);
+    const d = await res.json();
+    const text = d.available
+      ? JSON.stringify(d.health, null, 2)
+      : d.message || 'no health information';
+    if (out.textContent !== text) out.textContent = text;
+    statusEl.textContent = healthSummary(d);
+  } catch {
+    statusEl.textContent = 'fetch failed';
+  } finally {
+    if (schedule) schedulePoll(card, id, 'health', refreshHealth);
+  }
 }
 
 async function refreshLogs(card, id, { schedule = false } = {}) {
   const panel = card.querySelector('[data-role="logs"]');
-  if (!panel || !panel.open || !card.isConnected) return stopLogPoll(id);
+  if (!panel || !panel.open || !card.isConnected) return stopPoll(id, 'logs');
 
   const out = card.querySelector('[data-role="logs-output"]');
   const statusEl = card.querySelector('[data-role="logs-status"]');
@@ -990,11 +1054,7 @@ async function refreshLogs(card, id, { schedule = false } = {}) {
   } catch {
     statusEl.textContent = 'fetch failed';
   } finally {
-    const auto = card.querySelector('[data-role="logs-auto"]');
-    if (schedule && auto.checked && panel.open && card.isConnected) {
-      stopLogPoll(id);
-      logTimers.set(id, setTimeout(() => refreshLogs(card, id, { schedule: true }), LOG_POLL_MS));
-    }
+    if (schedule) schedulePoll(card, id, 'logs', refreshLogs);
   }
 }
 
