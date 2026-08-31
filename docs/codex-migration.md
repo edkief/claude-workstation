@@ -3,7 +3,7 @@
 > **Implementation update (2026-08-31):** the repository now takes the dual
 > support route without replacing the workspace agent. Every workspace runs
 > `@edkief/codexapp@0.1.87` on port 7684 with
-> `CODEXUI_BASE_PATH=/codex/<workspace-id>`. The dashboard proxies its HTTP and
+> `--base-path /codex/<workspace-id>`. The dashboard proxies its HTTP and
 > App Server WebSocket traffic, and persistent Codex state lives at
 > `/workspace/_home/codex`. The assessment below remains useful background for
 > a future Codex-only mode and shared-credential work, but its statement that

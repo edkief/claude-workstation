@@ -136,7 +136,7 @@ test('pod manifest: workspace pods get no API-server token', () => {
     assert.equal(m.spec.restartPolicy, 'Always');
 });
 
-test('pod manifest: ttyd and Codex base paths match their proxy routes', () => {
+test('pod manifest: ttyd base path and persistent Codex home are configured', () => {
     const id = 'claude-ws-x-0badf00d';
     const m = buildWorkspacePodManifest({
         id, key: 'github.com/e/r', repoUrl: 'git@github.com:e/r.git',
@@ -146,7 +146,7 @@ test('pod manifest: ttyd and Codex base paths match their proxy routes', () => {
     const env = Object.fromEntries(m.spec.containers[0].env
         .filter((e) => e.value !== undefined).map((e) => [e.name, e.value]));
     assert.equal(env.TTY_BASE_PATH, `/tty/${id}`);
-    assert.equal(env.CODEXUI_BASE_PATH, `/codex/${id}`);
+    assert.equal(env.CODEXUI_BASE_PATH, undefined);
     assert.equal(env.CODEX_HOME, '/workspace/_home/codex');
     assert.equal(env.BRANCH_SLUG, 'main');
     assert.equal(env.FORCE_RESET, 'false');

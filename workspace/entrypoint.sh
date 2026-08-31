@@ -21,7 +21,6 @@ export BRANCH_SLUG="${BRANCH_SLUG:-$(echo "$BRANCH" | tr -c 'a-zA-Z0-9-' '-')}"
 export CLAUDE_SESSION_NAME="${CLAUDE_SESSION_NAME:-$WORKSPACE_ID}"
 export TTY_BASE_PATH="${TTY_BASE_PATH:-/tty/$WORKSPACE_ID}"
 export CODEX_HOME="${CODEX_HOME:-/workspace/_home/codex}"
-export CODEXUI_BASE_PATH="${CODEXUI_BASE_PATH:-/codex/$WORKSPACE_ID}"
 export GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 # Everything below (and the tmux server, and claude inside it) resolves
 # ~/.claude from HOME; CRI does not set it from the image user.

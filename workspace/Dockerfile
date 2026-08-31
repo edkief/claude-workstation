@@ -56,9 +56,14 @@ USER ubuntu
 # expensive OS, Gradle and ttyd layers above it.
 ARG CODEX_CLI_VERSION=0.151.0
 ARG CODEX_APP_VERSION=0.1.87
+# 0.1.87 was republished in place with the --base-path CLI contract. Consume
+# this arg in the install layer so builders cannot reuse the pre-republish
+# package from Docker's cache.
+ARG CODEX_APP_REVISION=2
 # npm 11 blocks dependency lifecycle scripts unless explicitly allowed.
 # codexapp/node-pty need theirs to select or build the native PTY binding.
 RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.5/install.sh | bash \
+    && test -n "$CODEX_APP_REVISION" \
     && . "$NVM_DIR/nvm.sh" \
     && nvm install 24 \
     && nvm alias default 24 \

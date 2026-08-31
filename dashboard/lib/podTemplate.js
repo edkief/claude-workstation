@@ -99,9 +99,9 @@ function buildWorkspacePodManifest({
                     // ttyd bakes its base path into the JS it serves, so the
                     // dashboard hands it the exact prefix it is proxied under.
                     { name: 'TTY_BASE_PATH', value: `/tty/${id}` },
-                    // codexapp likewise emits prefix-aware asset and WebSocket
-                    // URLs. CODEX_HOME stays on the repo PVC across pod swaps.
-                    { name: 'CODEXUI_BASE_PATH', value: `/codex/${id}` },
+                    // codexapp gets its base path as a CLI argument in
+                    // supervisord. CODEX_HOME stays on the repo PVC across
+                    // pod swaps.
                     { name: 'CODEX_HOME', value: '/workspace/_home/codex' },
                     { name: 'CLAUDE_CODE_VERSION', value: cfg.claudeCodeVersion },
                     { name: 'CONFIG_PUSH_POLICY', value: cfg.configPushPolicy },
