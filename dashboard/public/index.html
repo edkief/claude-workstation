@@ -845,6 +845,9 @@ function makeSessionCard(s) {
         </div>
       </div>
       <div class="session-actions">
+        <button class="btn btn-ghost btn-sm" data-role="codex"
+                onclick="openCodex('${escHtml(s.id)}')"
+                ${codexAttrs(s)}>Codex</button>
         <button class="btn btn-ghost btn-sm" data-role="terminal"
                 onclick="openTerminal('${escHtml(s.id)}')"
                 ${terminalAttrs(s)}>Terminal</button>
@@ -889,6 +892,14 @@ function terminalAttrs(s) {
   return `disabled title="${escHtml(s.message || 'workspace is still starting')}"`;
 }
 
+// Codex UI is supervised independently of Claude. Once the container is
+// running its route can display the auto-refresh startup page, even if Claude
+// authentication keeps the Kubernetes readiness condition false.
+function codexAttrs(s) {
+  if (s.phase === 'Running') return '';
+  return `disabled title="${escHtml(s.message || 'workspace is still starting')}"`;
+}
+
 function renderSessions(sessions) {
   const container = document.getElementById('sessions-container');
 
@@ -926,6 +937,12 @@ function renderSessions(sessions) {
         else if (s.authFailed) term.title = 'Claude needs a login \u2014 run /login here';
         else term.removeAttribute('title');
       }
+      const codex = card.querySelector('[data-role="codex"]');
+      if (codex) {
+        codex.disabled = s.phase !== 'Running';
+        if (codex.disabled) codex.title = s.message || 'workspace is still starting';
+        else codex.removeAttribute('title');
+      }
     }
     const atPos = list.children[i];
     if (atPos !== card) list.insertBefore(card, atPos || null);
@@ -941,6 +958,11 @@ function renderSessions(sessions) {
 function openTerminal(id) {
   const s = sessionById(id);
   window.open(s ? s.terminalUrl : `/tty/${encodeURIComponent(id)}/`, '_blank');
+}
+
+function openCodex(id) {
+  const s = sessionById(id);
+  window.open(s ? s.codexUrl : `/codex/${encodeURIComponent(id)}/`, '_blank');
 }
 
 // --- In-card panels: logs and health ---
@@ -1222,10 +1244,12 @@ async function submitSession(body, { errEl, okEl, form }) {
     const data = await res.json();
     if (data.error === 'workspace_busy' && data.session) {
       const choice = await showChoice('Workspace already running', data.message, [
-        { key: 'attach',  label: 'Open terminal', className: 'btn-primary' },
+        { key: 'codex',   label: 'Open Codex',    className: 'btn-primary' },
+        { key: 'attach',  label: 'Open terminal', className: 'btn-ghost' },
         { key: 'replace', label: 'Replace',       className: 'btn-danger' },
         { key: 'cancel',  label: 'Cancel',        className: 'btn-ghost' },
       ]);
+      if (choice === 'codex') { window.open(data.session.codexUrl, '_blank'); return; }
       if (choice === 'attach') { window.open(data.session.terminalUrl, '_blank'); return; }
       if (choice === 'replace') { return submitSession({ ...body, replace: true }, { errEl, okEl, form }); }
       return;
