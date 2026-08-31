@@ -20,6 +20,8 @@ export BRANCH="${BRANCH:-main}"
 export BRANCH_SLUG="${BRANCH_SLUG:-$(echo "$BRANCH" | tr -c 'a-zA-Z0-9-' '-')}"
 export CLAUDE_SESSION_NAME="${CLAUDE_SESSION_NAME:-$WORKSPACE_ID}"
 export TTY_BASE_PATH="${TTY_BASE_PATH:-/tty/$WORKSPACE_ID}"
+export CODEX_HOME="${CODEX_HOME:-/workspace/_home/codex}"
+export CODEXUI_BASE_PATH="${CODEXUI_BASE_PATH:-/codex/$WORKSPACE_ID}"
 export GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 # Everything below (and the tmux server, and claude inside it) resolves
 # ~/.claude from HOME; CRI does not set it from the image user.
@@ -68,6 +70,13 @@ export NVM_DIR="/home/ubuntu/.nvm"
 CLAUDE_CONFIG_FILE="/home/ubuntu/.claude.json"
 CLAUDE_CONFIG_TARGET="/workspace/_home/claude.json"
 mkdir -p /workspace/_home
+mkdir -p "$CODEX_HOME"
+chmod 700 "$CODEX_HOME"
+# CODEX_HOME is authoritative; the symlink keeps an interactive `codex` from
+# the web terminal on the same persistent state even if a child drops the env.
+if [ ! -e /home/ubuntu/.codex ]; then
+    ln -s "$CODEX_HOME" /home/ubuntu/.codex
+fi
 if [ ! -e "$CLAUDE_CONFIG_TARGET" ]; then
     if [ -f "$CLAUDE_CONFIG_FILE" ] && [ ! -L "$CLAUDE_CONFIG_FILE" ]; then
         mv "$CLAUDE_CONFIG_FILE" "$CLAUDE_CONFIG_TARGET"
@@ -101,7 +110,7 @@ fi
 # ----------------------------------------------------------------- the repo
 stage cloning
 /home/ubuntu/bootstrap/clone.sh || fail "git clone failed -- see logs"
-WORKSPACE_DIR="$(cat "$STATE_DIR/dir")"
+export WORKSPACE_DIR="$(cat "$STATE_DIR/dir")"
 
 node /home/ubuntu/bootstrap/seed-claude-config.js || fail "could not seed claude config"
 
