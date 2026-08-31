@@ -81,6 +81,27 @@ app.use('/tty/:id', asyncRoute(async (req, res) => {
     ttyProxy.proxyRequest(req, res, target);
 }));
 
+// codexapp is base-path aware, just like ttyd: preserve /codex/<id> for its
+// assets, JSON-RPC calls, login routes, and WebSocket endpoint.
+app.use('/codex/:id', asyncRoute(async (req, res) => {
+    const { id } = req.params;
+    if (!isWorkspaceId(id)) return res.status(404).send(ttyProxy.notFoundPage(id));
+
+    const target = await ttyProxy.resolveTarget(id, {
+        port: ttyProxy.CODEX_PORT,
+        healthPath: `/codex/${id}/`,
+    });
+    if (target.gone) {
+        return res.status(404).type('html').send(ttyProxy.notFoundPage(id));
+    }
+    if (target.notReady) {
+        const session = sessions.describePod(target.pod, { agentHealth: target.agentHealth });
+        return res.status(503).type('html').send(ttyProxy.notReadyPage(id, session));
+    }
+    req.url = req.originalUrl;
+    ttyProxy.proxyRequest(req, res, target);
+}));
+
 // ------------------------------------------------------------------- config
 
 // The config shell runs inside this pod, so it is a plain localhost hop --
@@ -360,6 +381,10 @@ const server = http.createServer(app);
 // WebSocket upgrades bypass Express entirely.
 server.on('upgrade', async (req, socket, head) => {
     try {
+        if (!ttyProxy.isSameOriginUpgrade(req)) {
+            return socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+        }
+
         const configMatch = /^\/config-tty(\/|$)/.test(req.url);
         if (configMatch) {
             return ttyProxy.proxyUpgrade(req, socket, head, {
@@ -367,10 +392,13 @@ server.on('upgrade', async (req, socket, head) => {
             });
         }
 
-        const m = /^\/tty\/([a-z0-9-]+)(?:\/|$)/.exec(req.url);
-        if (!m || !isWorkspaceId(m[1])) return socket.destroy();
+        const match = ttyProxy.matchWorkspaceUpgrade(req.url);
+        if (!match || !isWorkspaceId(match.id)) return socket.destroy();
 
-        const target = await ttyProxy.resolveTarget(m[1]);
+        const target = await ttyProxy.resolveTarget(match.id, {
+            port: match.port,
+            healthPath: match.healthPath,
+        });
         if (target.gone) return socket.end('HTTP/1.1 404 Not Found\r\n\r\n');
         if (target.notReady) return socket.end('HTTP/1.1 503 Service Unavailable\r\n\r\n');
         ttyProxy.proxyUpgrade(req, socket, head, target);
