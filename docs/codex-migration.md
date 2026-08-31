@@ -5,7 +5,9 @@
 > `@edkief/codexapp@0.1.87` on port 7684 with
 > `--base-path /codex/<workspace-id>`. The dashboard proxies its HTTP and
 > App Server WebSocket traffic, and persistent Codex state lives at
-> `/workspace/_home/codex`. The assessment below remains useful background for
+> `/workspace/_home/codex`. Codex runs with `danger-full-access` and approval
+> policy `never` because the workspace is designed for unattended remote work;
+> the pod boundary provides containment. The assessment below remains useful background for
 > a future Codex-only mode and shared-credential work, but its statement that
 > only a web TTY is available has been superseded by this implementation.
 
