@@ -1,13 +1,14 @@
 # claude-workstation
 
-Browser-accessible Claude Code development environments on Kubernetes, plugged
-directly into Claude remote connect.
+Browser-accessible Claude Code and Codex development environments on Kubernetes.
+Claude workspaces plug directly into Claude Remote; Codex is available through
+an authenticated, per-workspace web client backed by `codex app-server`.
 
 A small **dashboard** app lets you browse your GitHub repos, pick a branch, and
 launch a workspace. Each workspace is **its own Kubernetes pod** with a web
-terminal ([ttyd](https://github.com/tsl0922/ttyd)), a persistent per-repo volume,
-and a scratch Postgres. Once running, it is reachable as a Claude Code remote
-session, and the dashboard proxies a terminal straight into it.
+terminal ([ttyd](https://github.com/tsl0922/ttyd)), Codex UI, a persistent
+per-repo volume, and a scratch Postgres. The dashboard proxies both browser
+interfaces directly to that pod.
 
 ## How it works
 
@@ -19,11 +20,13 @@ Browser
 │ claude-dashboard                        │
 │   /api/*        session + storage API   │──── Kubernetes API
 │   /tty/<id>/*   reverse proxy (HTTP+WS) │────┐
+│   /codex/<id>/* reverse proxy (HTTP+WS) │────┤
 │   /config-tty/  shared-config shell     │    │
 └─────────────────────────────────────────┘    ▼
                         ┌──────────────────────────────────────┐
                         │ claude-workspace pod (one per repo)  │
                         │   ttyd → byobu → claude remote       │
+                        │   codexapp → codex app-server        │
                         │   agent (health/disk), postgres      │
                         │   /workspace ← per-repo PVC          │
                         └──────────────────────────────────────┘
@@ -171,9 +174,14 @@ error rather than an obvious misconfiguration.
 
 - **Start a session** — pick a repo and branch, press *Start Session*. The card
   shows `starting` with live progress, then `running`.
+- **Open Codex** — press *Codex* on a running workspace. The first use of each
+  repo volume may require a Codex login; its state persists under
+  `/workspace/_home/codex` when the pod is replaced.
+- **Open Claude/terminal** — press *Terminal*, or attach through Claude Remote
+  as before. Codex and Claude run alongside each other in the same checkout.
 - **Already running?** Storage is per repo and only one pod may hold it, so
   starting a second session for the same repo returns a conflict and the UI
-  offers **Open terminal** or **Replace**.
+  offers **Open Codex**, **Open terminal**, or **Replace**.
 - **Terminate** stops the pod but **keeps the storage**, so the next session on
   that repo starts warm. Storage is reclaimed by the nightly prune (30 days) or
   explicitly from the *Workspace Storage* card.

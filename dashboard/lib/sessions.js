@@ -155,6 +155,7 @@ function describePod(pod, { agentHealth = null, warning = null } = {}) {
         restartCount: cs?.restartCount ?? 0,
         lastTerminationReason: cs?.lastState?.terminated?.reason || null,
         terminalUrl: `/tty/${pod.metadata.name}/`,
+        codexUrl: `/codex/${pod.metadata.name}/`,
         limits: limitsFromPod(pod),
     };
 }

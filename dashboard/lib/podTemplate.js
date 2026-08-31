@@ -85,6 +85,7 @@ function buildWorkspacePodManifest({
                 ports: [
                     { containerPort: 7681, name: 'tty' },
                     { containerPort: 7682, name: 'agent' },
+                    { containerPort: 7684, name: 'codex-ui' },
                 ],
                 env: [
                     { name: 'WORKSPACE_ID', value: id },
@@ -98,6 +99,10 @@ function buildWorkspacePodManifest({
                     // ttyd bakes its base path into the JS it serves, so the
                     // dashboard hands it the exact prefix it is proxied under.
                     { name: 'TTY_BASE_PATH', value: `/tty/${id}` },
+                    // codexapp likewise emits prefix-aware asset and WebSocket
+                    // URLs. CODEX_HOME stays on the repo PVC across pod swaps.
+                    { name: 'CODEXUI_BASE_PATH', value: `/codex/${id}` },
+                    { name: 'CODEX_HOME', value: '/workspace/_home/codex' },
                     { name: 'CLAUDE_CODE_VERSION', value: cfg.claudeCodeVersion },
                     { name: 'CONFIG_PUSH_POLICY', value: cfg.configPushPolicy },
                     // Where the shared OAuth token lives. Propagated rather

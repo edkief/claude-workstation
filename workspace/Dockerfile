@@ -51,12 +51,24 @@ RUN echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 USER ubuntu
 
+# Keep the browser client and the app-server it drives reproducible. Put these
+# args immediately before their use so a version bump does not invalidate the
+# expensive OS, Gradle and ttyd layers above it.
+ARG CODEX_CLI_VERSION=0.151.0
+ARG CODEX_APP_VERSION=0.1.87
+# npm 11 blocks dependency lifecycle scripts unless explicitly allowed.
+# codexapp/node-pty need theirs to select or build the native PTY binding.
 RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.5/install.sh | bash \
     && . "$NVM_DIR/nvm.sh" \
     && nvm install 24 \
     && nvm alias default 24 \
     && nvm use default \
-    && npm install -g pnpm @anthropic-ai/claude-code
+    && npm config set @edkief:registry https://npm.kieffer.me/ \
+    && npm install -g \
+        --allow-scripts=@anthropic-ai/claude-code,@edkief/codexapp,node-pty,@firebase/util,protobufjs \
+        pnpm @anthropic-ai/claude-code \
+        "@openai/codex@${CODEX_CLI_VERSION}" \
+        "@edkief/codexapp@${CODEX_APP_VERSION}"
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
     && . "$CARGO_HOME/env" \
@@ -73,7 +85,10 @@ RUN . "$NVM_DIR/nvm.sh" \
     && ln -s "$(which npm)"  /usr/local/bin/npm \
     && ln -s "$(which npx)"  /usr/local/bin/npx \
     && ln -s "$(which pnpm)" /usr/local/bin/pnpm \
-    && ln -s "$(which claude)" /usr/local/bin/claude
+    && ln -s "$(which claude)" /usr/local/bin/claude \
+    && ln -s "$(which codex)" /usr/local/bin/codex \
+    && ln -s "$(which codexapp)" /usr/local/bin/codexapp \
+    && ln -s "$(which codexui)" /usr/local/bin/codexui
 RUN ln -s /home/ubuntu/.cargo/bin/cargo     /usr/local/bin/cargo \
     && ln -s /home/ubuntu/.cargo/bin/rustc  /usr/local/bin/rustc \
     && ln -s /home/ubuntu/.cargo/bin/rustup /usr/local/bin/rustup \
@@ -144,7 +159,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/claude-config-sync
 USER ubuntu
 WORKDIR /workspace
 
-# 7681 ttyd (proxied by the dashboard), 7682 agent, 5432 scratch postgres.
-EXPOSE 7681 7682 5432
+# 7681 ttyd, 7682 agent, 7684 Codex UI (all dashboard-only), 5432 Postgres.
+EXPOSE 7681 7682 7684 5432
 
 CMD ["/usr/local/bin/entrypoint.sh"]

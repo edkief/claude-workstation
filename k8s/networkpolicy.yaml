@@ -1,7 +1,7 @@
 ---
-# Port 7681 is an unauthenticated root-capable shell and 7682 is the unauth'd
-# agent. With one pod per workspace the exposure multiplies, so only the
-# dashboard may reach them.
+# Ports 7681 (shell), 7682 (agent), and 7684 (Codex UI) are unauthenticated
+# inside the cluster. With one pod per workspace the exposure multiplies, so
+# only the dashboard may reach them.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -23,3 +23,5 @@ spec:
           port: 7681
         - protocol: TCP
           port: 7682
+        - protocol: TCP
+          port: 7684

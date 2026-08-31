@@ -1,5 +1,14 @@
 # Switching the workspace agent from Claude Code to Codex
 
+> **Implementation update (2026-08-31):** the repository now takes the dual
+> support route without replacing the workspace agent. Every workspace runs
+> `@edkief/codexapp@0.1.87` on port 7684 with
+> `CODEXUI_BASE_PATH=/codex/<workspace-id>`. The dashboard proxies its HTTP and
+> App Server WebSocket traffic, and persistent Codex state lives at
+> `/workspace/_home/codex`. The assessment below remains useful background for
+> a future Codex-only mode and shared-credential work, but its statement that
+> only a web TTY is available has been superseded by this implementation.
+
 An assessment of what it would take to run OpenAI's Codex CLI in the workspace
 pods instead of (or alongside) Claude Code. Written 2026-08-29 against Codex's
 published documentation; nothing here has been tried against a live Codex
