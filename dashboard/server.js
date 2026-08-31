@@ -19,7 +19,6 @@ const { ValidationError, validateRepoFullName } = require('./lib/validate');
 const { isWorkspaceId } = require('./lib/naming');
 
 const app = express();
-app.use(express.json({ limit: '16kb' }));
 
 const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -111,6 +110,12 @@ app.use('/config-tty', (req, res) => {
     req.url = req.originalUrl;
     ttyProxy.proxyRequest(req, res, { id: '__config__', ip: '127.0.0.1', port: CONFIG_TTY_PORT });
 });
+
+// Proxy routes above must receive the untouched request stream. Registering
+// express.json() before them consumes Codex RPC POST bodies, then the raw proxy
+// forwards the original Content-Length with no bytes and codexapp waits
+// forever. Only the dashboard's own API routes need JSON parsing.
+app.use(express.json({ limit: '16kb' }));
 
 function runConfigSync(args) {
     return new Promise((resolve) => {
