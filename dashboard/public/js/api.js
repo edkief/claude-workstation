@@ -1,0 +1,8 @@
+async function request(url, options) {
+  const response = await fetch(url, options);
+  const type = response.headers.get('content-type') || '';
+  const data = type.includes('application/json') ? await response.json() : await response.text();
+  if (!response.ok) throw Object.assign(new Error((typeof data === 'object' ? data.message || data.error : data) || `Request failed (${response.status})`), { response, data });
+  return data;
+}
+export const api = { info: () => request('/api/info'), repos: () => request('/api/repos'), branches: repo => request(`/api/branches?repo=${encodeURIComponent(repo)}`), sessions: () => request('/api/sessions'), createSession: body => request('/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), removeSession: id => request(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }), resources: () => request('/api/resources'), disk: () => request('/api/disk'), prune: olderThanDays => request('/api/workspaces/prune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ olderThanDays }) }), removeWorkspace: name => request(`/api/workspaces/${encodeURIComponent(name)}`, { method: 'DELETE' }), configStatus: () => request('/api/config/status'), pushConfig: () => request('/api/config/push', { method: 'POST' }), token: fresh => request(`/api/config/token${fresh ? '?fresh=1' : ''}`), refreshToken: () => request('/api/config/token/refresh?force=1', { method: 'POST' }), health: id => request(`/api/sessions/${encodeURIComponent(id)}/health`), logs: (id, lines) => request(`/api/sessions/${encodeURIComponent(id)}/logs?tail=${lines}`) };
