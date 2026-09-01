@@ -17,6 +17,7 @@ const ANN = {
     keyRaw: 'claude.kieffer.me/workspace-key-raw',
     sessionName: 'claude.kieffer.me/session-name',
     startedAt: 'claude.kieffer.me/started-at',
+    resourceProfile: 'claude.kieffer.me/resource-profile',
 };
 
 /**
@@ -32,6 +33,7 @@ const ANN = {
 function buildWorkspacePodManifest({
     id, key, repoUrl, repoFullName, branch, baseBranch,
     newBranch = null, sessionName, pvcName, resetHard = false,
+    resourceProfile = 'default', resources = cfg.workspaceResources,
 }) {
     const branchSlug = slug(branch, 40);
 
@@ -56,6 +58,7 @@ function buildWorkspacePodManifest({
                 [ANN.keyRaw]: key,
                 [ANN.sessionName]: sessionName,
                 [ANN.startedAt]: new Date().toISOString(),
+                [ANN.resourceProfile]: resourceProfile,
             },
         },
         spec: {
@@ -125,7 +128,7 @@ function buildWorkspacePodManifest({
                     // credentials themselves rather than by convention.
                     { secretRef: { name: cfg.workspaceS3Secret() } },
                 ],
-                resources: cfg.workspaceResources,
+                resources,
                 volumeMounts: [
                     { name: 'ws', mountPath: '/workspace' },
                     { name: 'ws', mountPath: '/home/ubuntu/.claude', subPath: '_home/claude' },

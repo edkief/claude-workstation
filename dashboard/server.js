@@ -15,6 +15,7 @@ const agent = require('./lib/agentClient');
 const ttyProxy = require('./lib/ttyProxy');
 const tokenCheck = require('./lib/tokenCheck');
 const tokenRefresh = require('./lib/tokenRefresh');
+const resourceProfiles = require('./lib/resourceProfiles');
 const { ValidationError, validateRepoFullName } = require('./lib/validate');
 const { isWorkspaceId } = require('./lib/naming');
 
@@ -189,6 +190,39 @@ app.get('/api/info', asyncRoute(async (req, res) => {
             storage: cfg.storageSize,
         },
     });
+}));
+
+// -------------------------------------------------------- resource profiles
+
+app.get('/api/resource-profiles', asyncRoute(async (req, res) => {
+    res.json(await resourceProfiles.list());
+}));
+
+app.put('/api/resource-profiles/:id', asyncRoute(async (req, res) => {
+    try {
+        res.json(await resourceProfiles.put(req.params.id, req.body));
+    } catch (err) {
+        fail(res, err);
+    }
+}));
+
+app.put('/api/resource-profiles/default/:id', asyncRoute(async (req, res) => {
+    try {
+        const profile = await resourceProfiles.setDefault(req.params.id);
+        res.json({ defaultProfileId: profile.id });
+    } catch (err) {
+        fail(res, err);
+    }
+}));
+
+app.delete('/api/resource-profiles/:id', asyncRoute(async (req, res) => {
+    try {
+        const removed = await resourceProfiles.remove(req.params.id);
+        if (!removed) return res.status(404).json({ error: 'not_found', message: 'profile not found' });
+        res.status(204).end();
+    } catch (err) {
+        fail(res, err);
+    }
 }));
 
 // ------------------------------------------------------------------- github

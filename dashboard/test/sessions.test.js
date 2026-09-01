@@ -136,6 +136,21 @@ test('pod manifest: workspace pods get no API-server token', () => {
     assert.equal(m.spec.restartPolicy, 'Always');
 });
 
+test('pod manifest: a selected resource profile controls requests and limits', () => {
+    const resources = {
+        requests: { cpu: '1', memory: '2Gi', 'ephemeral-storage': '3Gi' },
+        limits: { cpu: '4', memory: '8Gi', 'ephemeral-storage': '16Gi' },
+    };
+    const m = buildWorkspacePodManifest({
+        id: 'claude-ws-x-0badf00d', key: 'github.com/e/r',
+        repoUrl: 'git@github.com:e/r.git', repoFullName: 'e/r',
+        branch: 'main', baseBranch: 'main', sessionName: 'r-main',
+        pvcName: 'claude-ws-x-0badf00d', resourceProfile: 'large', resources,
+    });
+    assert.deepEqual(m.spec.containers[0].resources, resources);
+    assert.equal(m.metadata.annotations['claude.kieffer.me/resource-profile'], 'large');
+});
+
 test('pod manifest: ttyd base path and persistent Codex home are configured', () => {
     const id = 'claude-ws-x-0badf00d';
     const m = buildWorkspacePodManifest({

@@ -39,6 +39,7 @@ which is the reason this design replaced the previous single-pod one.
 | `dashboard/lib/workspaceKey.js` | **The one place that defines storage granularity** (see below) |
 | `dashboard/lib/naming.js` | `workspaceId()` — deterministic, DNS-safe, ≤63 chars |
 | `dashboard/lib/podTemplate.js` | `buildWorkspacePodManifest()` — pure function, unit-tested |
+| `dashboard/lib/resourceProfiles.js` | PVC-backed workspace CPU/memory/storage profiles and default |
 | `dashboard/lib/sessions.js` | Lifecycle + `deriveStatus()` (pod → UI status) |
 | `dashboard/lib/pvcs.js` | Per-repo PVC create/describe/prune, `touchPvc()` |
 | `dashboard/lib/ttyProxy.js` | Pod-IP resolution + HTTP/WebSocket proxying |
@@ -57,7 +58,7 @@ which is the reason this design replaced the previous single-pod one.
 
 ## Session lifecycle
 
-1. `POST /api/sessions {project, branch, newBranch?, replace?, resetHard?}`.
+1. `POST /api/sessions {project, branch, resourceProfile?, newBranch?, replace?, resetHard?}`.
 2. The dashboard validates the inputs, derives `key = workspaceKey({repoUrl})`
    and `id = workspaceId(key)`, and checks whether a pod named `id` exists.
    - Exists and `replace` is not set → **409** with the running session and
@@ -183,6 +184,16 @@ function workspaceKey({ repoUrl, branch }) { return repoId(repoUrl); }
 For one PVC per repo **and** branch, return `` `${repoId(repoUrl)}#${branch}` ``.
 The `_home/` prefix and per-branch directory layout already match what that
 change implies, so nothing else moves.
+
+### Resource profiles
+
+Workspace CPU, memory and ephemeral-storage requests/limits are selected from a
+resource profile at session creation. The initial `default` profile is seeded
+from the `WORKSPACE_*_REQUEST`/`WORKSPACE_*_LIMIT` environment variables. The
+dashboard UI and `/api/resource-profiles/*` manage profiles and the selected
+default in an atomically-written JSON file on the existing dashboard config PVC
+(`RESOURCE_PROFILES_PATH`). A running pod keeps its concrete resources across a
+restart even if its named profile is later edited or deleted.
 
 ## Claude config (shared, via S3)
 
@@ -381,6 +392,7 @@ narrow TOCTOU window remains.)
 | `GET` | `/api/repos`, `/api/branches?repo=` | GitHub listing |
 | `GET` | `/api/sessions`, `/api/sessions/:id` | 30 s cache, skipped while anything is unsettled |
 | `POST` | `/api/sessions` | **202** / 400 / **409** / 429 |
+| `GET` · `PUT` · `DELETE` | `/api/resource-profiles/*` | Manage PVC-backed requests/limits and the startup default |
 | `DELETE` | `/api/sessions/:id` | 202; keeps the PVC unless `?deletePvc=true` |
 | `POST` | `/api/sessions/:id/restart` | 202 |
 | `GET` | `/api/sessions/:id/logs?tail=N` | `text/plain`; the UI polls this into a per-card panel |

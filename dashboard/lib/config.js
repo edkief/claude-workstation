@@ -77,6 +77,11 @@ module.exports = {
 
     maxWorkspaces: intEnv('MAX_WORKSPACES', 4),
 
+    // Resource profiles share the dashboard's existing config PVC. The store
+    // is a separate file because claude-config-sync owns the rest of this tree.
+    resourceProfilesPath: env('RESOURCE_PROFILES_PATH',
+        `${process.env.HOME || '/home/node'}/.claude/.dashboard/resource-profiles.json`),
+
     githubSecretName: env('GITHUB_SECRET_NAME', 'github-ssh-key'),
     // Two S3 users are provisioned up front so CONFIG_PUSH_POLICY can be
     // flipped without creating new cluster objects.

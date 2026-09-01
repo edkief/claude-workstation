@@ -2,6 +2,7 @@ import { api } from './api.js';
 import { attentionStatus, barTone, escHtml, fmtCpu, fmtGi, fmtMem } from './format.js';
 import { createSessionCard, isAttention, updateSessionCard, updateSessionMetrics } from './session-card.js';
 import { createSessionForm } from './session-form.js';
+import { setupResourceProfiles } from './resource-profiles.js';
 
 const state = { sessions: [], filter: 'all', pending: new Set(), sessionTimer: null, cards: new Map() };
 const settled = new Set(['running', 'degraded', 'failed']);
@@ -139,11 +140,12 @@ async function submitSession(body) {
   }
 }
 
-function setupTabs() { [['storage-tab','storage-panel'],['config-tab','config-panel']].forEach(([tabId, panelId]) => $("#" + tabId).addEventListener('click', () => { for (const [otherTab, otherPanel] of [['storage-tab','storage-panel'],['config-tab','config-panel']]) { const active = otherTab === tabId; $("#" + otherTab).classList.toggle('is-active', active); $("#" + otherTab).setAttribute('aria-selected', String(active)); $("#" + otherPanel).hidden = !active; } })); }
+function setupTabs() { const tabs = [['storage-tab','storage-panel'],['profiles-tab','profiles-panel'],['config-tab','config-panel']]; tabs.forEach(([tabId]) => $("#" + tabId).addEventListener('click', () => { for (const [otherTab, otherPanel] of tabs) { const active = otherTab === tabId; $("#" + otherTab).classList.toggle('is-active', active); $("#" + otherTab).setAttribute('aria-selected', String(active)); $("#" + otherPanel).hidden = !active; } })); }
 
 document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => { state.filter = button.dataset.filter; document.querySelectorAll('[data-filter]').forEach(item => item.classList.toggle('is-active', item === button)); renderSessions(); }));
 $('#remove-inactive-btn').addEventListener('click', removeInactive); $('#cleanup-btn').addEventListener('click', cleanupWorkspaces); $('#config-push-btn').addEventListener('click', pushConfig); $('#token-refresh-btn').addEventListener('click', refreshToken); $('#token-recheck-btn').addEventListener('click', () => loadToken(true));
 createSessionForm({ onSubmit: submitSession }); setupTabs();
+setupResourceProfiles({ choose, toast });
 api.info().then(data => { if (data.dashboardPod) { $('#pod-name').textContent = data.dashboardPod; $('#pod-name').hidden = false; } if (data.metricsAvailable === false) $('#metrics-hint').textContent = 'Live metrics unavailable'; }).catch(() => {});
 loadSessions(); loadResources(); loadDisk(); loadConfig(); loadToken();
 setInterval(loadResources, 5000); setInterval(loadDisk, 60000); setInterval(loadConfig, 60000); setInterval(loadToken, 300000);

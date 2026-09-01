@@ -11,9 +11,29 @@ export function createSessionForm({ onSubmit }) {
   const branch = document.getElementById('branch-select');
   const error = document.getElementById('msg-error');
   const success = document.getElementById('msg-success');
+  const profile = document.getElementById('resource-profile');
   let repos = [], manual = false, manualBranch = false, active = -1, opener = null;
 
-  const open = event => { opener = event?.currentTarget || document.activeElement; drawer.hidden = false; backdrop.hidden = false; document.body.style.overflow = 'hidden'; setTimeout(() => (manual ? document.getElementById('project-manual') : filter).focus(), 0); };
+  async function loadProfiles() {
+    try {
+      const data = await api.resourceProfiles();
+      profile.innerHTML = data.profiles.map(item => {
+        const resources = item.resources;
+        const detail = `${resources.limits.cpu} CPU / ${resources.limits.memory} memory`;
+        const selected = data.defaultProfileId === item.id ? ' selected' : '';
+        return `<option value="${escHtml(item.id)}"${selected}>${escHtml(item.name)} — ${escHtml(detail)}</option>`;
+      }).join('');
+      profile.disabled = false;
+      document.getElementById('resource-profile-hint').textContent =
+        'Profiles and the default are persisted on the dashboard PVC.';
+    } catch (reason) {
+      profile.innerHTML = '<option value="">Profiles unavailable</option>';
+      profile.disabled = true;
+      document.getElementById('resource-profile-hint').textContent = reason.message;
+    }
+  }
+
+  const open = event => { opener = event?.currentTarget || document.activeElement; loadProfiles(); drawer.hidden = false; backdrop.hidden = false; document.body.style.overflow = 'hidden'; setTimeout(() => (manual ? document.getElementById('project-manual') : filter).focus(), 0); };
   const close = () => { drawer.hidden = true; backdrop.hidden = true; document.body.style.overflow = ''; opener?.focus(); };
   document.getElementById('open-session-drawer').addEventListener('click', open);
   document.getElementById('close-session-drawer').addEventListener('click', close);
@@ -68,6 +88,8 @@ export function createSessionForm({ onSubmit }) {
     try { repos = await api.repos(); filter.placeholder = 'Search repositories…'; document.getElementById('repo-hint').textContent = `${repos.length} repositories available`; }
     catch { filter.placeholder = 'Repositories unavailable — use a URL'; document.getElementById('repo-hint').textContent = 'You can enter a Git URL manually.'; }
   })();
+  loadProfiles();
+  document.addEventListener('resource-profiles-changed', loadProfiles);
 
   form.addEventListener('submit', async event => {
     event.preventDefault(); error.textContent = ''; success.textContent = '';
@@ -79,7 +101,7 @@ export function createSessionForm({ onSubmit }) {
     const button = document.getElementById('start-session-btn');
     button.disabled = true; button.innerHTML = '<span class="spinner"></span>Starting…';
     try {
-      const result = await onSubmit({ project, branch: branchName, resetHard: form.resetHard.checked, ...(newBranch && { newBranch }) });
+      const result = await onSubmit({ project, branch: branchName, resourceProfile: profile.value, resetHard: form.resetHard.checked, ...(newBranch && { newBranch }) });
       if (result?.started) { success.textContent = `Starting “${result.started.displayName}”…`; form.reset(); selected.value = ''; branch.innerHTML = '<option value="">Select a repository first</option>'; setTimeout(close, 700); }
     } catch (reason) { error.textContent = reason.message || 'Could not start the workspace.'; }
     finally { button.disabled = false; button.textContent = 'Start workspace'; }

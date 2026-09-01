@@ -8,6 +8,7 @@ const { workspaceId, sessionName: buildSessionName } = require('./naming');
 const { buildWorkspacePodManifest, ANN } = require('./podTemplate');
 const { validateRepoUrl, validateBranch, validateOptionalBranch } = require('./validate');
 const agent = require('./agentClient');
+const resourceProfiles = require('./resourceProfiles');
 
 const FATAL_WAITING = new Set([
     'ImagePullBackOff', 'ErrImagePull', 'InvalidImageName',
@@ -157,6 +158,7 @@ function describePod(pod, { agentHealth = null, warning = null } = {}) {
         terminalUrl: `/tty/${pod.metadata.name}/`,
         codexUrl: `/codex/${pod.metadata.name}/`,
         limits: limitsFromPod(pod),
+        resourceProfile: ann[ANN.resourceProfile] || null,
     };
 }
 
@@ -254,7 +256,9 @@ class CapacityError extends Error {
  * Create a workspace. Returns immediately once the Pod is accepted by the API
  * server -- readiness is the caller's problem, reported via GET /api/sessions.
  */
-async function createSession({ project, branch, newBranch, replace = false, resetHard = false }) {
+async function createSession({
+    project, branch, newBranch, replace = false, resetHard = false, resourceProfile,
+}) {
     const repoUrl = validateRepoUrl(project);
     const baseBranch = validateBranch(branch, 'branch');
     const created = validateOptionalBranch(newBranch, 'newBranch');
@@ -263,6 +267,7 @@ async function createSession({ project, branch, newBranch, replace = false, rese
     const key = workspaceKey({ repoUrl, branch: effectiveBranch });
     const id = workspaceId(key);
     const repo = repoFullName(repoUrl);
+    const profile = await resourceProfiles.get(resourceProfile);
 
     const existing = await k8s.getPod(id);
     if (existing) {
@@ -296,6 +301,8 @@ async function createSession({ project, branch, newBranch, replace = false, rese
         newBranch: created, resetHard,
         sessionName: buildSessionName(repo, effectiveBranch),
         pvcName: id,
+        resourceProfile: profile.id,
+        resources: profile.resources,
     });
 
     const pod = await k8s.createPod(manifest);
@@ -332,6 +339,10 @@ async function restartSession(id) {
         baseBranch: ann[ANN.baseBranch] || ann[ANN.branch],
         sessionName: ann[ANN.sessionName],
         pvcName: id,
+        resourceProfile: ann[ANN.resourceProfile] || 'legacy',
+        // A restart must not silently resize a workspace if its profile was
+        // edited or deleted after this pod was created.
+        resources: pod.spec?.containers?.[0]?.resources || cfg.workspaceResources,
     }));
     sessionsCache.invalidate();
     return describePod(created);

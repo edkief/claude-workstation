@@ -150,6 +150,8 @@ spec:
               value: "4Gi"
             - name: MAX_WORKSPACES
               value: "4"
+            - name: RESOURCE_PROFILES_PATH
+              value: "/home/node/.claude/.dashboard/resource-profiles.json"
             - name: CLAUDE_CODE_VERSION
               value: "latest"
             # any | dashboard | additive -- see AGENTS.md. Flipping this and
