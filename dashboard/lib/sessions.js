@@ -165,7 +165,9 @@ function describePod(pod, { agentHealth = null, warning = null } = {}) {
 
 function validClaudeUrl(value) {
     return typeof value === 'string'
-        && /^https:\/\/claude\.ai\/code\/session_[A-Za-z0-9_-]+$/.test(value)
+        // Keep in sync with CLAUDE_SESSION_URL_RE in workspace/agent.js: the
+        // environment form claude prints today, and the older session path.
+        && /^https:\/\/claude\.ai\/code(?:\?environment=env_[A-Za-z0-9_-]+|\/session_[A-Za-z0-9_-]+)$/.test(value)
         ? value
         : null;
 }

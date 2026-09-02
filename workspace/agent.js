@@ -62,7 +62,16 @@ let tokenSyncError = null;
 let lastTokenSync = { at: null, adopted: false, published: false, error: null };
 let claudeUrl = null;
 
-const CLAUDE_SESSION_URL_RE = /https:\/\/claude\.ai\/code\/session_[A-Za-z0-9_-]+/g;
+// What `claude remote` actually prints once it has registered:
+//
+//     Continue coding in the Claude mobile app or
+//     https://claude.ai/code?environment=env_01HU1hDuzwnSKSL75Um5vukD
+//
+// The id is the *environment*, not a session -- claude.ai resolves it to the
+// live remote session. The older `/code/session_<id>` path form is matched too
+// so an image running a different claude keeps working.
+const CLAUDE_SESSION_URL_RE =
+    /https:\/\/claude\.ai\/code(?:\?environment=env_[A-Za-z0-9_-]+|\/session_[A-Za-z0-9_-]+)/g;
 
 /**
  * Terminal failures a *login* fixes. Claude prints these and exits (or sits at

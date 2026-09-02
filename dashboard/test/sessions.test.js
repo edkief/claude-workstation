@@ -99,8 +99,10 @@ test('describePod exposes per-session terminal and Codex URLs and real limits', 
 
 test('describePod exposes only a validated Claude remote-control session URL', () => {
     const p = pod({ status: { phase: 'Running', ...ready } });
-    const expected = 'https://claude.ai/code/session_01UjNkFrRYNWcm23fPhzsoJ6';
+    const expected = 'https://claude.ai/code?environment=env_01HU1hDuzwnSKSL75Um5vukD';
     assert.equal(describePod(p, { agentHealth: { claudeUrl: expected } }).claudeUrl, expected);
+    const legacy = 'https://claude.ai/code/session_01UjNkFrRYNWcm23fPhzsoJ6';
+    assert.equal(describePod(p, { agentHealth: { claudeUrl: legacy } }).claudeUrl, legacy);
     assert.equal(describePod(p, { agentHealth: { claudeUrl: 'https://evil.example/session_x' } }).claudeUrl, null);
 });
 
