@@ -15,7 +15,7 @@ function summary(health) {
 
 function statusClass(status) { return `status status--${String(status || 'unknown').replace(/[^a-z-]/g, '')}`; }
 
-export function createSessionCard(session, { onTerminate, onOpenTerminal, onOpenCodex }) {
+export function createSessionCard(session, { onTerminate, onOpenTerminal, onOpenCodex, onOpenClaude }) {
   const card = document.createElement('article');
   card.className = 'session-card';
   card.dataset.session = session.id;
@@ -29,6 +29,7 @@ export function createSessionCard(session, { onTerminate, onOpenTerminal, onOpen
       <div class="session-side">
         <div class="session-meters">${meter('CPU', 'cpu')}${meter('Memory', 'memory')}</div>
         <div class="session-actions">
+          <button class="button button--primary button--small" data-action="claude">Open Claude</button>
           <button class="button button--primary button--small" data-action="codex">Open Codex</button>
           <button class="button button--secondary button--small" data-action="terminal">Terminal</button>
           <button class="button button--danger button--small" data-action="terminate">Terminate</button>
@@ -39,6 +40,7 @@ export function createSessionCard(session, { onTerminate, onOpenTerminal, onOpen
     <details class="details" data-panel="logs"><summary>Logs <span class="details__status" data-panel-status="logs"></span></summary><div class="diagnostic"><div class="diagnostic-toolbar"><label><input type="checkbox" checked data-auto="logs"> Auto-refresh</label><label>Lines <select data-lines><option value="200">200</option><option value="500" selected>500</option><option value="2000">2000</option><option value="5000">5000</option></select></label><a data-raw="logs" target="_blank" rel="noopener">Open raw</a></div><pre data-panel-output="logs">Open to load logs.</pre></div></details>`;
 
   const action = role => card.querySelector(`[data-action="${role}"]`);
+  action('claude').addEventListener('click', () => onOpenClaude(card._session));
   action('codex').addEventListener('click', () => onOpenCodex(card._session));
   action('terminal').addEventListener('click', () => onOpenTerminal(card._session));
   action('terminate').addEventListener('click', () => onTerminate(card._session));
@@ -63,6 +65,11 @@ export function updateSessionCard(card, session) {
   const codex = card.querySelector('[data-action="codex"]');
   codex.disabled = session.phase !== 'Running';
   codex.title = codex.disabled ? session.message || 'Workspace is still starting' : '';
+  const claude = card.querySelector('[data-action="claude"]');
+  claude.disabled = !session.claudeUrl || !session.ready;
+  claude.title = claude.disabled
+    ? session.claudeUrl ? session.message || 'Claude session is reconnecting' : 'Claude session link is still being discovered'
+    : '';
   card.querySelector('[data-raw="health"]').href = `/api/sessions/${encodeURIComponent(session.id)}/health`;
   card.querySelector('[data-raw="logs"]').href = `/api/sessions/${encodeURIComponent(session.id)}/logs?tail=${card.querySelector('[data-lines]').value}`;
 }

@@ -91,9 +91,17 @@ test('describePod exposes per-session terminal and Codex URLs and real limits', 
     const s = describePod(pod({ status: { phase: 'Running', ...ready } }));
     assert.equal(s.terminalUrl, '/tty/claude-ws-edkief-repo-0badf00d/');
     assert.equal(s.codexUrl, '/codex/claude-ws-edkief-repo-0badf00d/');
+    assert.equal(s.claudeUrl, null);
     assert.equal(s.displayName, 'repo · feature/x');
     assert.deepEqual(s.limits, { cpuMillicores: 2000, memMiB: 4096 });
     assert.equal(s.ready, true);
+});
+
+test('describePod exposes only a validated Claude remote-control session URL', () => {
+    const p = pod({ status: { phase: 'Running', ...ready } });
+    const expected = 'https://claude.ai/code/session_01UjNkFrRYNWcm23fPhzsoJ6';
+    assert.equal(describePod(p, { agentHealth: { claudeUrl: expected } }).claudeUrl, expected);
+    assert.equal(describePod(p, { agentHealth: { claudeUrl: 'https://evil.example/session_x' } }).claudeUrl, null);
 });
 
 test('limit parsing covers the forms k8s accepts', () => {

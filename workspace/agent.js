@@ -60,6 +60,9 @@ let tokenSyncAt = 0;
 let tokenSyncRunning = false;
 let tokenSyncError = null;
 let lastTokenSync = { at: null, adopted: false, published: false, error: null };
+let claudeUrl = null;
+
+const CLAUDE_SESSION_URL_RE = /https:\/\/claude\.ai\/code\/session_[A-Za-z0-9_-]+/g;
 
 /**
  * Terminal failures a *login* fixes. Claude prints these and exits (or sits at
@@ -108,8 +111,28 @@ function tmuxSessionExists() {
 // for `remote` / `--spawn`. Deliberately does NOT match a generic `Error:`.
 const LAUNCH_FAILURE_RE = /command not found|unknown (?:option|command)|error: unknown/i;
 
-function capturePane() {
-    return sh('tmux', ['capture-pane', '-t', TMUX_SESSION, '-p']) || '';
+function capturePane({ history = false } = {}) {
+    const args = ['capture-pane', '-t', TMUX_SESSION, '-p'];
+    // The Remote Control URL is printed once during startup. Join wrapped
+    // lines and include scrollback so it remains discoverable after work has
+    // pushed the banner out of the visible pane.
+    if (history) args.push('-J', '-S', '-');
+    return sh('tmux', args) || '';
+}
+
+function extractClaudeUrl(text) {
+    const matches = String(text || '').match(CLAUDE_SESSION_URL_RE);
+    return matches?.at(-1) || null;
+}
+
+function discoverClaudeUrl() {
+    const found = extractClaudeUrl(capturePane({ history: true }));
+    if (found) claudeUrl = found;
+    return claudeUrl;
+}
+
+function withClaudeUrl(result) {
+    return { ...result, claudeUrl: discoverClaudeUrl() };
 }
 
 /**
@@ -299,6 +322,10 @@ function tryRelaunch() {
     if (Date.now() - lastRelaunchAt < RELAUNCH_BACKOFF_MS) return;
     lastRelaunchAt = Date.now();
     relaunches += 1;
+    // A successful relaunch can register a different remote session. Keep the
+    // action disabled while readiness is down, then select the newest URL from
+    // tmux history once Claude is running again.
+    claudeUrl = null;
     console.log(`[agent] claude session gone; relaunch attempt ${relaunches}/${RELAUNCH_MAX}`);
     sh('tmux', [
         'send-keys', '-t', TMUX_SESSION,
@@ -337,7 +364,7 @@ function health() {
         launchingSince = null;
         relaunches = 0;
         if (!wasReadyOnce()) markReady();
-        return { ready: true, stage: 'ready', terminalReady, detail: null };
+        return withClaudeUrl({ ready: true, stage: 'ready', terminalReady, detail: null });
     }
 
     // Claude is not running. Time the absence first, then ask whether a login
@@ -353,13 +380,13 @@ function health() {
     const pane = capturePane();
     const auth = authFailure(Date.now() - absentSince, pane);
     if (auth) {
-        return {
+        return withClaudeUrl({
             ready: false,
             stage: 'auth-failed',
             terminalReady,
             reason: auth.reason,
             detail: auth.detail,
-        };
+        });
     }
 
     // Ready once, gone now: a real regression. Not-ready immediately, and the
@@ -368,13 +395,13 @@ function health() {
     if (wasReadyOnce()) {
         tryRelaunch();
         const secs = Math.round((Date.now() - missingSince) / 1000);
-        return {
+        return withClaudeUrl({
             ready: false,
             stage: 'session-lost',
             terminalReady,
             detail: `claude remote (--name ${SESSION_NAME || '?'}) not running for ${secs}s; `
                 + `relaunch attempts ${relaunches}/${RELAUNCH_MAX}`,
-        };
+        });
     }
 
     // Pre-ready only: the pane is still the bootstrap/launch transcript here,
@@ -387,7 +414,7 @@ function health() {
     // match the launch command never running at all, which self-heal cannot
     // fix either.
     if (LAUNCH_FAILURE_RE.test(pane)) {
-        return { ready: false, stage: 'failed', terminalReady, detail: tail(pane) };
+        return withClaudeUrl({ ready: false, stage: 'failed', terminalReady, detail: tail(pane) });
     }
 
     // Claude has never come up and nothing in the pane says why. Left alone
@@ -395,15 +422,15 @@ function health() {
     // stage the UI shows as a failure with the pane attached.
     const waited = Date.now() - launchingSince;
     if (waited > LAUNCH_TIMEOUT_MS) {
-        return {
+        return withClaudeUrl({
             ready: false,
             stage: 'launch-failed',
             terminalReady,
             reason: `claude did not start within ${Math.round(waited / 1000)}s`,
             detail: tail(pane),
-        };
+        });
     }
-    return { ready: false, stage: 'starting', terminalReady, detail: tail(pane) };
+    return withClaudeUrl({ ready: false, stage: 'starting', terminalReady, detail: tail(pane) });
 }
 
 /**
@@ -470,33 +497,39 @@ function send(res, status, body) {
     res.end(payload);
 }
 
-http.createServer((req, res) => {
-    const path = (req.url || '').split('?')[0];
+function startServer() {
+    return http.createServer((req, res) => {
+        const path = (req.url || '').split('?')[0];
 
-    if (path === '/livez') {
-        const l = live();
-        return send(res, l.ok ? 200 : 503, l);
-    }
+        if (path === '/livez') {
+            const l = live();
+            return send(res, l.ok ? 200 : 503, l);
+        }
 
-    if (path === '/healthz') {
-        // Throttled and fire-and-forget: the probe answers from local state.
-        maintainToken();
-        const h = health();
-        return send(res, h.ready ? 200 : 503, h);
-    }
+        if (path === '/healthz') {
+            // Throttled and fire-and-forget: the probe answers from local state.
+            maintainToken();
+            const h = health();
+            return send(res, h.ready ? 200 : 503, h);
+        }
 
-    if (path === '/disk') {
-        const d = disk();
-        return d ? send(res, 200, d) : send(res, 503, { error: 'df failed' });
-    }
+        if (path === '/disk') {
+            const d = disk();
+            return d ? send(res, 200, d) : send(res, 503, { error: 'df failed' });
+        }
 
-    if (path === '/session') return send(res, 200, session());
+        if (path === '/session') return send(res, 200, session());
 
-    // Token state only -- never the token. The dashboard polls this to warn
-    // before a login expires rather than after a session mysteriously dies.
-    if (path === '/auth') return send(res, 200, credentials());
+        // Token state only -- never the token. The dashboard polls this to warn
+        // before a login expires rather than after a session mysteriously dies.
+        if (path === '/auth') return send(res, 200, credentials());
 
-    send(res, 404, { error: 'not found' });
-}).listen(PORT, '0.0.0.0', () => {
-    console.log(`[agent] listening on ${PORT}`);
-});
+        send(res, 404, { error: 'not found' });
+    }).listen(PORT, '0.0.0.0', () => {
+        console.log(`[agent] listening on ${PORT}`);
+    });
+}
+
+if (require.main === module) startServer();
+
+module.exports = { extractClaudeUrl, startServer };

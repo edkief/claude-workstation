@@ -157,9 +157,17 @@ function describePod(pod, { agentHealth = null, warning = null } = {}) {
         lastTerminationReason: cs?.lastState?.terminated?.reason || null,
         terminalUrl: `/tty/${pod.metadata.name}/`,
         codexUrl: `/codex/${pod.metadata.name}/`,
+        claudeUrl: validClaudeUrl(agentHealth?.claudeUrl),
         limits: limitsFromPod(pod),
         resourceProfile: ann[ANN.resourceProfile] || null,
     };
+}
+
+function validClaudeUrl(value) {
+    return typeof value === 'string'
+        && /^https:\/\/claude\.ai\/code\/session_[A-Za-z0-9_-]+$/.test(value)
+        ? value
+        : null;
 }
 
 /** Stages whose whole point is the reason, so the detail is the message. */
@@ -209,11 +217,11 @@ function stageLabel(stage) {
  */
 async function describeWithContext(pod) {
     const status = deriveStatus(pod);
-    if (status !== 'starting' && status !== 'failed') return describePod(pod);
+    const needsWarning = status === 'starting' || status === 'failed';
 
     const [agentHealth, warning] = await Promise.all([
         pod.status?.podIP ? agent.health(pod.status.podIP) : null,
-        k8s.latestWarning(pod.metadata.name),
+        needsWarning ? k8s.latestWarning(pod.metadata.name) : null,
     ]);
     return describePod(pod, { agentHealth, warning });
 }
