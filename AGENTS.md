@@ -207,6 +207,12 @@ viable. A **curated allowlist** (~8 MB) is synced instead:
 | `skills/`, `plugins/`, `agents/`, `commands/` | `shell-snapshots/`, `history.jsonl`, `cache/` |
 | `.claude.json` (**stripped**, see below) | `uploads/`, `telemetry/`, `backups/`, `file-history/` |
 
+The S3-backed `~/.claude/skills` directory is canonical. Workspace bootstrap
+links `$CODEX_HOME/skills` to it so Claude Code and Codex discover the same
+skills without duplicating them. On older PVCs, existing Codex-only skills are
+migrated into the canonical directory without overwriting same-named synced
+skills before the link is created.
+
 `.claude.json` is **merged, never overwritten**. On push, machine-specific and
 cache keys are stripped (`projects`, `machineID`, `userID`, `cached*`, `*Cache`,
 `last*`, …) — 61 keys reduce to ~19, 123 KB to ~3 KB. On pull, the remote doc is

@@ -99,6 +99,11 @@ else
     echo "[entrypoint] S3_ENDPOINT unset; skipping config sync"
 fi
 
+# Skills are synced into Claude's native directory. Codex has its own discovery
+# path, so expose the same files there rather than maintaining a second copy.
+/home/ubuntu/bootstrap/link-shared-skills.sh \
+    || echo "[entrypoint] WARN: shared skills could not be linked for Codex"
+
 # The pull is the only thing that can supply credentials, so an empty config
 # here means claude will start at a login prompt. Say so in the log rather than
 # leaving it to be discovered inside the terminal.

@@ -155,6 +155,11 @@ claude-config-sync push
 ```
 
 Every workspace created afterwards inherits that config on first boot.
+Skills remain stored once under `~/.claude/skills`; workspace bootstrap links
+`$CODEX_HOME/skills` to that directory so both Claude Code and Codex discover
+the same S3-synced skills. Existing Codex-only skills are migrated into the
+shared directory on the first restart, without replacing same-named synced
+skills.
 
 The bucket and keys need to exist in Garage first:
 

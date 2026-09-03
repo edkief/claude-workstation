@@ -7,9 +7,12 @@
 > App Server WebSocket traffic, and persistent Codex state lives at
 > `/workspace/_home/codex`. Codex runs with `danger-full-access` and approval
 > policy `never` because the workspace is designed for unattended remote work;
-> the pod boundary provides containment. The assessment below remains useful background for
-> a future Codex-only mode and shared-credential work, but its statement that
-> only a web TTY is available has been superseded by this implementation.
+> the pod boundary provides containment. Workspace bootstrap also links
+> `$CODEX_HOME/skills` to the S3-backed `~/.claude/skills`, giving both CLIs one
+> shared skill store. The assessment below remains useful background for a
+> future Codex-only mode and shared-credential work, but its statements that
+> only a web TTY is available and that Codex has no skill equivalent have been
+> superseded by this implementation.
 
 An assessment of what it would take to run OpenAI's Codex CLI in the workspace
 pods instead of (or alongside) Claude Code. Written 2026-08-29 against Codex's
@@ -112,15 +115,18 @@ recommendation below prefers it.
 | `settings.json` (JSON) | `config.toml` (**TOML** — different merge code) |
 | `CLAUDE.md` | `AGENTS.md` |
 | `commands/` | `prompts/` |
-| `skills/`, `plugins/`, `agents/` | no equivalent; MCP servers are declared in `config.toml` |
+| `skills/` | `skills/` (linked to the S3-backed Claude directory in dual mode) |
+| `plugins/`, `agents/` | no direct equivalent; MCP servers are declared in `config.toml` |
 | `.claude.json`, stripped and merged (61 keys → ~19) | no analog |
 
 The merge semantics are the substantive part. `.claude.json` merging exists
 because that file mixes shared settings with machine-specific state and a
 per-directory trust map that each pod must keep. Codex's `config.toml` has no
 such split, so the strip list and the `projects` preservation rule go away — but
-merging TOML while preserving comments and table ordering is its own problem, and
-`CONFIG_PUSH_POLICY`'s `additive` mode loses the directories it currently names.
+merging TOML while preserving comments and table ordering is its own problem.
+Skills can keep their existing additive policy through the shared directory;
+Claude-specific `agents/` and `commands/` still need an explicit Codex-only
+policy decision.
 
 Everything in `shared/claude-config-sync/` below the allowlist is agent-agnostic
 and stays: the rclone transport and its 0600 config file, the root-level
