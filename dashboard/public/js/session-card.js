@@ -20,24 +20,29 @@ export function createSessionCard(session, { onTerminate, onOpenTerminal, onOpen
   card.className = 'session-card';
   card.dataset.session = session.id;
   card.innerHTML = `
-    <div class="session-card__main">
-      <div>
-        <div class="session-title"><h3 data-role="name"></h3><span data-role="status"></span></div>
-        <div class="session-meta"><span data-role="repo"></span><span data-role="started"></span></div>
-        <p class="session-message" data-role="message"></p>
-      </div>
-      <div class="session-side">
-        <div class="session-meters">${meter('CPU', 'cpu')}${meter('Mem', 'memory')}</div>
-        <div class="session-actions">
-          <button class="button button--primary button--small" data-action="claude">Open Claude</button>
-          <button class="button button--primary button--small" data-action="codex">Open Codex</button>
-          <button class="button button--secondary button--small" data-action="terminal">Terminal</button>
-          <button class="button button--danger button--small" data-action="terminate">Terminate</button>
+    <div class="session-card__content">
+      <div class="session-card__main">
+        <div>
+          <div class="session-title"><h3 data-role="name"></h3></div>
+          <div class="session-meta"><span data-role="repo"></span><span data-role="started"></span></div>
+          <p class="session-message" data-role="message"></p>
+        </div>
+        <div class="session-side">
+          <span data-role="status"></span>
+          <div class="session-meters">${meter('CPU', 'cpu')}${meter('Mem', 'memory')}</div>
+          <div class="session-actions">
+            <button class="button button--primary button--small" data-action="claude">Open Claude</button>
+            <button class="button button--primary button--small" data-action="codex">Open Codex</button>
+            <button class="button button--secondary button--small" data-action="terminal">Terminal</button>
+            <button class="button button--danger button--small" data-action="terminate">Terminate</button>
+          </div>
         </div>
       </div>
-    </div>
-    <details class="details" data-panel="health"><summary>Health <span class="details__status" data-panel-status="health"></span></summary><div class="diagnostic"><div class="diagnostic-toolbar"><label><input type="checkbox" checked data-auto="health"> Auto-refresh</label><a data-raw="health" target="_blank" rel="noopener">Open raw</a></div><pre data-panel-output="health">Open to load health information.</pre></div></details>
-    <details class="details" data-panel="logs"><summary>Logs <span class="details__status" data-panel-status="logs"></span></summary><div class="diagnostic"><div class="diagnostic-toolbar"><label><input type="checkbox" checked data-auto="logs"> Auto-refresh</label><label>Lines <select data-lines><option value="200">200</option><option value="500" selected>500</option><option value="2000">2000</option><option value="5000">5000</option></select></label><a data-raw="logs" target="_blank" rel="noopener">Open raw</a></div><pre data-panel-output="logs">Open to load logs.</pre></div></details>`;
+      <div class="session-diagnostics">
+        <details class="details" data-panel="health"><summary>Health <span class="details__status" data-panel-status="health"></span></summary><div class="diagnostic"><div class="diagnostic-toolbar"><label class="toggle"><input type="checkbox" checked data-auto="health"><span class="toggle__track" aria-hidden="true"></span><span>Auto-refresh</span></label><a data-raw="health" target="_blank" rel="noopener">Open raw</a></div><pre data-panel-output="health">Open to load health information.</pre></div></details>
+        <details class="details" data-panel="logs"><summary>Logs <span class="details__status" data-panel-status="logs"></span></summary><div class="diagnostic"><div class="diagnostic-toolbar"><label class="toggle"><input type="checkbox" checked data-auto="logs"><span class="toggle__track" aria-hidden="true"></span><span>Auto-refresh</span></label><label class="lines-control">Lines <select data-lines><option value="200">200</option><option value="500" selected>500</option><option value="2000">2000</option><option value="5000">5000</option></select></label><a data-raw="logs" target="_blank" rel="noopener">Open raw</a></div><pre data-panel-output="logs">Open to load logs.</pre></div></details>
+      </div>
+    </div>`;
 
   const action = role => card.querySelector(`[data-action="${role}"]`);
   action('claude').addEventListener('click', () => onOpenClaude(card._session));
@@ -51,12 +56,12 @@ export function createSessionCard(session, { onTerminate, onOpenTerminal, onOpen
 
 export function updateSessionCard(card, session) {
   card._session = session;
-  card.querySelector('[data-role="name"]').textContent = session.displayName;
+  card.querySelector('[data-role="name"]').textContent = session.repoFullName || session.displayName;
   const badge = card.querySelector('[data-role="status"]');
   badge.className = statusClass(session.status);
   badge.textContent = session.status || 'unknown';
   const oom = session.restartCount > 0 && session.lastTerminationReason === 'OOMKilled' ? ` · restarted ${session.restartCount}× (OOMKilled)` : '';
-  card.querySelector('[data-role="repo"]').innerHTML = `${escHtml(session.repoFullName)} <span class="branch">${escHtml(session.branch)}</span>${oom}`;
+  card.querySelector('[data-role="repo"]').innerHTML = `<span class="branch">${escHtml(session.branch)}</span>${oom}`;
   card.querySelector('[data-role="started"]').textContent = fmtDate(session.startedAt);
   card.querySelector('[data-role="message"]').textContent = session.message || '';
   const terminal = card.querySelector('[data-action="terminal"]');
@@ -93,7 +98,10 @@ function setMetric(card, name, value, limit, formatter) {
 function wirePanels(card) {
   for (const kind of Object.keys(PANEL_MS)) {
     const panel = card.querySelector(`[data-panel="${kind}"]`);
-    panel.addEventListener('toggle', () => panel.open ? refreshPanel(card, kind, true) : stopPanel(card, kind));
+    panel.addEventListener('toggle', () => {
+      panel.parentElement.classList.toggle('has-open-panel', Boolean(panel.parentElement.querySelector('.details[open]')));
+      panel.open ? refreshPanel(card, kind, true) : stopPanel(card, kind);
+    });
     card.querySelector(`[data-auto="${kind}"]`).addEventListener('change', () => { stopPanel(card, kind); if (panel.open) refreshPanel(card, kind, true); });
   }
   card.querySelector('[data-lines]').addEventListener('change', event => {

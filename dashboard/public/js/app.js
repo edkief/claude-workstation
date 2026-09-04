@@ -37,6 +37,7 @@ function renderSessions() {
   const running = state.sessions.filter(session => ['running', 'starting'].includes(session.status)).length;
   const attention = state.sessions.filter(isAttention).length;
   $('#count-all').textContent = state.sessions.length; $('#count-running').textContent = running; $('#count-attention').textContent = attention;
+  $('#board-occupancy').textContent = `${visible.length} shown · ${running} attached`;
   $('#workspace-summary').textContent = state.sessions.length ? `${running} active · ${attention ? `${attention} need attention` : 'all systems responding'}` : 'No workspaces are running.';
   const container = $('#sessions-container');
   if (!visible.length) { container.innerHTML = `<div class="empty-state">${state.sessions.length ? 'No workspaces match this filter.' : 'No workspaces yet. Create one to start coding.'}</div>`; return; }
