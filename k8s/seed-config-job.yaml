@@ -39,7 +39,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: seed
-          image: registry.kieffer.me/claude-workstation/dashboard:latest
+          image: registry.kieffer.me/berth/dashboard:latest
           imagePullPolicy: Always
           envFrom:
             - secretRef:

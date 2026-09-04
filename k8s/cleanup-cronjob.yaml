@@ -5,7 +5,7 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: claude-workspace-prune
+  name: berth-workspace-prune
   namespace: dev
 spec:
   schedule: "0 2 * * *"
@@ -18,13 +18,13 @@ spec:
       template:
         spec:
           restartPolicy: Never
-          serviceAccountName: claude-dashboard
+          serviceAccountName: berth-dashboard
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
           containers:
             - name: prune
-              image: registry.kieffer.me/claude-workstation/dashboard:latest
+              image: registry.kieffer.me/berth/dashboard:latest
               imagePullPolicy: Always
               command: ["node", "/app/prune-pvcs.js", "--days", "30"]
               env:

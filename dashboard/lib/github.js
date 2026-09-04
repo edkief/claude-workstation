@@ -3,7 +3,7 @@
 const cfg = require('./config');
 
 function headers() {
-    const h = { 'User-Agent': 'claude-dashboard', Accept: 'application/vnd.github+json' };
+    const h = { 'User-Agent': 'berth-dashboard', Accept: 'application/vnd.github+json' };
     if (cfg.githubToken) h.Authorization = `Bearer ${cfg.githubToken}`;
     return h;
 }

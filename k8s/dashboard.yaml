@@ -2,13 +2,13 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: claude-dashboard
+  name: berth-dashboard
   namespace: dev
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: claude-dashboard
+  name: berth-dashboard
   namespace: dev
 rules:
   # Workspace pod lifecycle. `watch` is not used yet, but is pre-provisioned so
@@ -48,15 +48,15 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: claude-dashboard
+  name: berth-dashboard
   namespace: dev
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: claude-dashboard
+  name: berth-dashboard
 subjects:
   - kind: ServiceAccount
-    name: claude-dashboard
+    name: berth-dashboard
     namespace: dev
 ---
 # The dashboard's own working copy of the Claude config, edited through the
@@ -64,7 +64,7 @@ subjects:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: claude-dashboard-config
+  name: berth-dashboard-config
   namespace: dev
 spec:
   storageClassName: truenas-iscsi-ssd
@@ -79,7 +79,7 @@ spec:
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: claude-workspaces
+  name: berth-workspaces
   namespace: dev
 spec:
   hard:
@@ -91,7 +91,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: claude-dashboard
+  name: berth-dashboard
   namespace: dev
 spec:
   # Single replica: the TTL and proxy-target caches are in-process, and a
@@ -102,13 +102,13 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app: claude-dashboard
+      app: berth-dashboard
   template:
     metadata:
       labels:
-        app: claude-dashboard
+        app: berth-dashboard
     spec:
-      serviceAccountName: claude-dashboard
+      serviceAccountName: berth-dashboard
       securityContext:
         runAsUser: 1000
         runAsGroup: 1000
@@ -116,7 +116,7 @@ spec:
         fsGroupChangePolicy: "OnRootMismatch"
       containers:
         - name: dashboard
-          image: registry.kieffer.me/claude-workstation/dashboard:latest
+          image: registry.kieffer.me/berth/dashboard:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 3000
@@ -133,7 +133,7 @@ spec:
             # Pin to an immutable tag once the image settles: with :latest +
             # Always, every workspace start can pay a multi-GB re-pull.
             - name: WORKSPACE_IMAGE
-              value: "registry.kieffer.me/claude-workstation/workspace:latest"
+              value: "registry.kieffer.me/berth/workspace:latest"
             - name: WORKSPACE_IMAGE_PULL_POLICY
               value: "Always"
             - name: WORKSPACE_STORAGE_CLASS
@@ -198,29 +198,30 @@ spec:
       volumes:
         - name: config
           persistentVolumeClaim:
-            claimName: claude-dashboard-config
+            claimName: berth-dashboard-config
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: claude-dashboard
+  name: berth-dashboard
   namespace: dev
 spec:
   selector:
-    app: claude-dashboard
+    app: berth-dashboard
   ports:
     - name: http
       protocol: TCP
       port: 3000
       targetPort: http
 ---
-# Same name, host, TLS secret and auth middleware as the old Ingress, so
-# cert-manager is a no-op at cutover and the auth boundary is unchanged.
-# Only the backend moves, and /tty is now proxied by the dashboard itself.
+# Renamed from the old claude-workstation Ingress as part of the Berth
+# rebrand: name, host and TLS secret all changed, so this issues a fresh
+# cert-manager certificate and needs its own DNS record -- it is not a
+# no-op cutover the way the dashboard/workspace split was.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: claude-workstation
+  name: berth
   namespace: dev
   annotations:
     cert-manager.io/cluster-issuer: "letsencrypt-production"
@@ -229,16 +230,16 @@ spec:
   ingressClassName: traefik
   tls:
     - hosts:
-        - claude-workstation.kieffer.me
-      secretName: claude-workstation-tls
+        - berth.kieffer.me
+      secretName: berth-tls
   rules:
-    - host: claude-workstation.kieffer.me
+    - host: berth.kieffer.me
       http:
         paths:
           - pathType: Prefix
             path: /
             backend:
               service:
-                name: claude-dashboard
+                name: berth-dashboard
                 port:
                   name: http

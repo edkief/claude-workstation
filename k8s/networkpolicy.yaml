@@ -5,19 +5,19 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: claude-workspace-ingress
+  name: berth-workspace-ingress
   namespace: dev
 spec:
   podSelector:
     matchLabels:
-      app: claude-workspace
+      app: berth-workspace
   policyTypes:
     - Ingress
   ingress:
     - from:
         - podSelector:
             matchLabels:
-              app: claude-dashboard
+              app: berth-dashboard
       ports:
         - protocol: TCP
           port: 7681

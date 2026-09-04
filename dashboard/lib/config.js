@@ -55,7 +55,7 @@ module.exports = {
     githubUser: env('GITHUB_USER', 'edkief'),
     githubToken: env('GITHUB_TOKEN', ''),
 
-    workspaceImage: env('WORKSPACE_IMAGE', 'registry.kieffer.me/claude-workstation/workspace:latest'),
+    workspaceImage: env('WORKSPACE_IMAGE', 'registry.kieffer.me/berth/workspace:latest'),
     imagePullPolicy: env('WORKSPACE_IMAGE_PULL_POLICY', 'Always'),
     claudeCodeVersion: env('CLAUDE_CODE_VERSION', 'latest'),
 
@@ -124,7 +124,7 @@ module.exports = {
     pvcTouchMs: intEnv('PVC_TOUCH_MS', 600000),
 
     labels: {
-        app: 'claude-workspace',
-        managedBy: 'claude-dashboard',
+        app: 'berth-workspace',
+        managedBy: 'berth-dashboard',
     },
 };

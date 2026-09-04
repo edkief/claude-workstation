@@ -26,7 +26,7 @@ REGISTRY="${REGISTRY:-registry.kieffer.me}"
 # Mirrors the cluster's Tekton convention (<registry>/<repo>/<name>) so a local
 # build and a pipeline build produce byte-identical image references. See
 # .k8s-build.yaml -- keep the two in sync.
-REPO_NAME="${REPO_NAME:-claude-workstation}"
+REPO_NAME="${REPO_NAME:-berth}"
 NAMESPACE="${K8S_NAMESPACE:-dev}"
 DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
 
@@ -88,6 +88,6 @@ if [ "$ROLLOUT" = true ]; then
     echo "==> restarting the dashboard"
     # Only the dashboard: never restart a live workspace out from under an
     # agent. Workspaces pick up a new image on their next create.
-    kubectl rollout restart deployment/claude-dashboard -n "$NAMESPACE"
-    kubectl rollout status deployment/claude-dashboard -n "$NAMESPACE" --timeout=120s
+    kubectl rollout restart deployment/berth-dashboard -n "$NAMESPACE"
+    kubectl rollout status deployment/berth-dashboard -n "$NAMESPACE" --timeout=120s
 fi

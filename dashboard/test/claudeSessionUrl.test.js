@@ -6,7 +6,7 @@ const { extractClaudeUrl } = require('../../workspace/agent');
 
 test('extractClaudeUrl reads the environment URL claude remote prints', () => {
     const pane = [
-        '· Connected · claude-workstation · main',
+        '· Connected · berth · main',
         '    Capacity: 1/32 · New sessions will be created in the current directory',
         '',
         'Continue coding in the Claude mobile app or '

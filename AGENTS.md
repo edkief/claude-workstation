@@ -1,9 +1,24 @@
-# claude-workstation
+# Berth
 
-Browser-accessible Claude Code development environments on Kubernetes. A small
-dashboard app manages **one pod per workspace**: pick a repo and branch, get a
-web terminal with Claude attached, a per-repo persistent volume, and a scratch
-Postgres.
+Browser-accessible Claude Code and Codex development environments on
+Kubernetes. A small dashboard app manages **one pod per workspace**: pick a
+repo and branch, get a web terminal with Claude Remote and a Codex UI attached,
+a per-repo persistent volume, and a scratch Postgres.
+
+**Berth** is the product's name — the dashboard's title, header and the
+marketing page at `/welcome` (`dashboard/public/landing.html` +
+`styles/landing.css`) — and, as of the rebrand, its Kubernetes object names,
+registry image paths and `docker-push.sh`/`.k8s-build.yaml` conventions too:
+`claude-workstation` → `berth`, `claude-dashboard` → `berth-dashboard`,
+`claude-workspace` → `berth-workspace`. That rename touches live-cluster
+identity (Deployment/Service/Ingress names, the label selector workspace pods
+are found by, the image registry path), so applying these manifests over an
+existing `claude-*`-named deployment orphans it rather than upgrading it in
+place — see [Kubernetes](#kubernetes) and the label discussion under
+[Storage](#storage). The one place the old name is still correct to use is
+migrating off the *pre-split* single-pod deployment described in `README.md`,
+whose literal Deployment name (`claude-workstation`, from
+`k8s/legacy-claude-pod.yaml`) predates both this split and the Berth name.
 
 ## Architecture
 
@@ -11,20 +26,23 @@ Postgres.
 Browser
   │
   ▼  (Traefik ingress, authz-proxy middleware, one host/cert)
-┌─────────────────────────────────────────┐
-│ claude-dashboard (1 replica)            │
-│   /api/*        session + PVC control   │──── Kubernetes API (namespaced Role)
-│   /tty/<id>/*   HTTP+WS reverse proxy   │────┐
-│   /config-tty/  shared-config shell     │    │
-└─────────────────────────────────────────┘    │
-                                               ▼
-                        ┌──────────────────────────────────────┐
-                        │ claude-workspace pod (one per repo)  │
-                        │   :7681 ttyd  → byobu → claude remote│
-                        │   :7682 agent → /healthz /disk       │
-                        │   :5432 postgres (scratch)           │
-                        │   /workspace ← per-repo PVC          │
-                        └──────────────────────────────────────┘
+┌───────────────────────────────────────────┐
+│ berth-dashboard (1 replica)               │
+│   /welcome       Berth landing page       │
+│   /api/*         session + PVC control    │──── Kubernetes API (namespaced Role)
+│   /tty/<id>/*    HTTP+WS reverse proxy    │────┐
+│   /codex/<id>/*  HTTP+WS reverse proxy    │────┤
+│   /config-tty/   shared-config shell      │    │
+└───────────────────────────────────────────┘    │
+                                                  ▼
+                        ┌────────────────────────────────────────┐
+                        │ berth-workspace pod (one per repo)     │
+                        │   :7681 ttyd     → byobu → claude remote│
+                        │   :7684 codexapp → codex app-server    │
+                        │   :7682 agent    → /healthz /disk      │
+                        │   :5432 postgres (scratch)             │
+                        │   /workspace ← per-repo PVC             │
+                        └────────────────────────────────────────┘
 ```
 
 The dashboard creates Kubernetes objects; it never shells out. A runaway agent
@@ -46,15 +64,19 @@ which is the reason this design replaced the previous single-pod one.
 | `dashboard/lib/k8s.js` | Client, `TtlCache`, error helpers |
 | `dashboard/lib/metrics.js` | `metrics.k8s.io` with graceful degradation |
 | `dashboard/lib/tokenRefresh.js` | Renews the shared login and publishes it |
+| `dashboard/lib/ttyProxy.js` (`CODEX_PORT`) | Also resolves and proxies the Codex UI target |
 | `dashboard/prune-pvcs.js` | PVC pruner, run by a CronJob |
-| `dashboard/public/index.html` | Single-file UI, no build step |
+| `dashboard/public/index.html` | Single-file dashboard UI, no build step |
+| `dashboard/public/landing.html` + `styles/landing.css` | The Berth marketing page served at `/welcome` |
 | `workspace/entrypoint.sh` | Bootstrap: secrets → config pull → clone → seed → supervisord |
-| `workspace/agent.js` | In-pod health/disk endpoint (this is why we need no `pods/exec`) |
+| `workspace/agent.js` | In-pod health/disk endpoint (this is why we need no `pods/exec`); also discovers the live Claude Remote URL from the pane |
+| `workspace/supervisord.conf` | Runs ttyd, `codexapp` (Codex UI), the agent and Postgres |
 | `workspace/bootstrap/clone.sh` | Clone/refresh into `/workspace/<branch-slug>` |
 | `shared/claude-config-sync/` | S3 sync CLI, copied into **both** images |
 | `k8s/dashboard.yaml` | SA, Role, RoleBinding, PVC, ResourceQuota, Deployment, Service, Ingress |
 | `dashboard/.env.example` | Every dashboard setting; a test asserts it matches `lib/config.js` |
 | `workspace/.env.example` | The dashboard→pod env contract; a test asserts it matches `lib/podTemplate.js` |
+| `docs/codex-migration.md` | The assessment behind the Codex UI's design (auth model, why remote control doesn't port); kept as background, not current status |
 
 ## Session lifecycle
 
@@ -155,6 +177,60 @@ anything reshaped here is a field the panel would silently stop showing. The
 three unreachable cases (no pod IP, no answer, an answer that is not JSON) stay
 distinct for the same reason the terminal is never gated on readiness: a
 workspace that cannot explain itself is the permanent spinner all over again.
+
+### The Claude Remote link
+
+`claude remote` prints its URL once, on registration:
+
+```
+Continue coding in the Claude mobile app or
+https://claude.ai/code?environment=env_01HU1hDuzwnSKSL75Um5vukD
+```
+
+The agent greps every probe's pane capture (with scrollback, so it's still
+found after the banner has scrolled off) for that pattern — or the older
+`/code/session_<id>` form — and caches the last match as `claudeUrl` in its
+health response. `sessions.js` re-validates it server-side
+(`validClaudeUrl()`) before handing it to the UI, so a malformed or stale
+capture never becomes a link. The dashboard surfaces it as an **Open Claude**
+button that jumps straight to the live remote session instead of the
+terminal; the cached URL is cleared on relaunch so a new registration is
+required before the button reappears.
+
+## Codex
+
+Every workspace also runs Codex, as a second agent alongside Claude rather
+than a replacement for it — `docs/codex-migration.md` is the design
+assessment that led here (its "implementation update" note at the top says
+what shipped and what didn't; the rest of that file is background on
+alternatives that were rejected, not current status).
+
+- **Process**: `supervisord` runs `codexapp <workspace-dir> --port 7684
+  --base-path /codex/<id> --no-tunnel --no-open --no-login --no-password
+  --sandbox-mode danger-full-access --approval-policy never`. Unattended,
+  unapproved full access is deliberate — the workspace pod is the containment
+  boundary, the same trust model the terminal already has.
+- **Credentials**: `CODEX_HOME=/workspace/_home/codex`, on the repo's PVC, so
+  a Codex login survives pod replace the same way `~/.claude` does. A symlink
+  at `~/.codex` keeps an interactively-launched `codex` finding the same
+  state. Unlike Claude's OAuth token, nothing here syncs or refreshes it —
+  Codex is authenticated per workspace, interactively, through its own UI.
+- **Proxy**: `dashboard/server.js` proxies `/codex/<id>/*` to `CODEX_PORT`
+  (7684) the same way it proxies `/tty/<id>/*`, including the WebSocket
+  upgrade for `codex app-server`'s JSON-RPC channel. Both proxy routes must
+  see the raw request stream — `express.json()` is registered *after* them,
+  because parsing a Codex RPC body first would forward its `Content-Length`
+  with no bytes behind it and hang codexapp forever.
+- **Skills**: `$CODEX_HOME/skills` is a symlink to the S3-backed
+  `~/.claude/skills`, so both CLIs discover the same synced skills without a
+  second copy. On PVCs from before this existed, any Codex-only skills are
+  migrated into the shared directory (without clobbering same-named synced
+  ones) before the symlink is created.
+- **What doesn't exist**: no readiness gate on Codex the way `/healthz` gates
+  Claude, no `AUTH_PATTERNS`-style failure classification, and no equivalent
+  of Claude Remote — Codex has no headless remote-control surface to publish
+  to (§1 of `docs/codex-migration.md`), so the only way into a Codex session
+  is the workspace's own `/codex/<id>/` UI.
 
 ## Storage
 
@@ -396,7 +472,7 @@ narrow TOCTOU window remains.)
 |---|---|---|
 | `GET` | `/api/info` | Namespace, workspace image, `metricsAvailable`, defaults |
 | `GET` | `/api/repos`, `/api/branches?repo=` | GitHub listing |
-| `GET` | `/api/sessions`, `/api/sessions/:id` | 30 s cache, skipped while anything is unsettled |
+| `GET` | `/api/sessions`, `/api/sessions/:id` | 30 s cache, skipped while anything is unsettled; each session carries `terminalUrl`, `codexUrl` and (once discovered) `claudeUrl` |
 | `POST` | `/api/sessions` | **202** / 400 / **409** / 429 |
 | `GET` · `PUT` · `DELETE` | `/api/resource-profiles/*` | Manage PVC-backed requests/limits and the startup default |
 | `DELETE` | `/api/sessions/:id` | 202; keeps the PVC unless `?deletePvc=true` |
@@ -409,11 +485,12 @@ narrow TOCTOU window remains.)
 | `GET` | `/api/config/status` · `POST /api/config/push` | Config sync |
 | `GET` | `/api/config/token` | Watchdog verdict + auto-refresh state; `?fresh=1` re-checks now |
 | `POST` | `/api/config/token/refresh` | Run a maintenance pass now; `?force=1` renews even when not due |
-| `ALL` | `/tty/:id/*`, `/config-tty/*` | Proxied (incl. WebSocket upgrade) |
+| `ALL` | `/tty/:id/*`, `/codex/:id/*`, `/config-tty/*` | Proxied (incl. WebSocket upgrade) |
+| `GET` | `/welcome` | The Berth landing page (`landing.html`); everything else falls through to the dashboard SPA |
 
 ## Kubernetes
 
-Pods are labelled `app=claude-workspace` and carry the repo/branch as sanitised
+Pods are labelled `app=berth-workspace` and carry the repo/branch as sanitised
 label slugs plus full values in `claude.kieffer.me/*` annotations (label values
 cannot hold a URL or a branch with slashes). **There is no `state.json`** —
 Kubernetes is the source of truth, with a 30 s in-memory cache that is bypassed
@@ -472,8 +549,8 @@ CI builds run through the cluster's Tekton pipeline, configured by
 
 | | |
 |---|---|
-| `registry.kieffer.me/claude-workstation/dashboard` | `dashboard/Dockerfile` |
-| `registry.kieffer.me/claude-workstation/workspace` | `workspace/Dockerfile` |
+| `registry.kieffer.me/berth/dashboard` | `dashboard/Dockerfile` |
+| `registry.kieffer.me/berth/workspace` | `workspace/Dockerfile` |
 
 Two things about the build that are easy to get wrong:
 
@@ -489,6 +566,20 @@ interchangeable. Keep the two in sync if either changes.
 
 Secrets: see `k8s/secrets.example.yaml` (`github-ssh-key`,
 `claude-config-s3-rw`, `claude-config-s3-ro`).
+
+## Bundled workspace tooling
+
+The workspace image also carries `gh` (GitHub CLI, pre-authenticated from the
+same PAT used for cloning) and Playwright, with a `playwright-mcp` MCP server
+registered in the shared `~/.claude.json` bundle for browser automation from
+inside a session. `playwright` and `@playwright/mcp` are separate globals that
+each bundle and launch their own pinned `playwright-core`/chromium revision, so
+the Dockerfile installs the browser through *both* packages' own
+`playwright-core` — installing it once through the `playwright` CLI alone
+leaves the MCP server's pinned revision missing. The MCP config launches the
+`playwright-mcp` binary already on `PATH` rather than `npx -y
+@playwright/mcp@latest`, which would re-fetch from the registry on every start
+and could lose the race against the connect timeout during bootstrap.
 
 ## Postgres
 

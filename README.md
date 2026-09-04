@@ -1,4 +1,4 @@
-# claude-workstation
+# Berth
 
 Browser-accessible Claude Code and Codex development environments on Kubernetes.
 Claude workspaces plug directly into Claude Remote; Codex is available through
@@ -8,23 +8,25 @@ A small **dashboard** app lets you browse your GitHub repos, pick a branch, and
 launch a workspace. Each workspace is **its own Kubernetes pod** with a web
 terminal ([ttyd](https://github.com/tsl0922/ttyd)), Codex UI, a persistent
 per-repo volume, and a scratch Postgres. The dashboard proxies both browser
-interfaces directly to that pod.
+interfaces directly to that pod. Workspaces also ship the `gh` CLI and a
+Playwright MCP server for browser automation from inside a session.
 
 ## How it works
 
 ```
 Browser
-  │  https://claude-workstation.example.com   (one host, one cert, one auth middleware)
+  │  https://berth.example.com   (one host, one cert, one auth middleware)
   ▼
 ┌─────────────────────────────────────────┐
-│ claude-dashboard                        │
+│ berth-dashboard                         │
+│   /welcome      Berth landing page      │
 │   /api/*        session + storage API   │──── Kubernetes API
 │   /tty/<id>/*   reverse proxy (HTTP+WS) │────┐
 │   /codex/<id>/* reverse proxy (HTTP+WS) │────┤
 │   /config-tty/  shared-config shell     │    │
 └─────────────────────────────────────────┘    ▼
                         ┌──────────────────────────────────────┐
-                        │ claude-workspace pod (one per repo)  │
+                        │ berth-workspace pod (one per repo)   │
                         │   ttyd → byobu → claude remote       │
                         │   codexapp → codex app-server        │
                         │   agent (health/disk), postgres      │
@@ -43,13 +45,14 @@ design.
 ├── dashboard/          # control plane + UI (slim image)
 │   ├── Dockerfile  server.js  prune-pvcs.js
 │   ├── lib/        k8s client, pod template, proxy, metrics, validation
-│   ├── public/     single-file UI, no build step
+│   ├── public/     index.html (app) + landing.html (Berth's /welcome page)
 │   └── test/       pure-function tests (no cluster required)
 ├── workspace/          # the dev environment (fat image)
 │   ├── Dockerfile  entrypoint.sh  supervisord.conf  agent.js
 │   └── bootstrap/  clone.sh, seed-claude-config.js
 ├── shared/claude-config-sync/   # S3 config sync CLI, used by both images
 ├── k8s/                # manifests
+├── docs/codex-migration.md      # the assessment behind the Codex UI, kept as background
 └── docker-push.sh
 ```
 
@@ -108,8 +111,8 @@ Both paths produce the same references, following the cluster convention
 
 | Image | Reference |
 |---|---|
-| Dashboard | `registry.kieffer.me/claude-workstation/dashboard` |
-| Workspace | `registry.kieffer.me/claude-workstation/workspace` |
+| Dashboard | `registry.kieffer.me/berth/dashboard` |
+| Workspace | `registry.kieffer.me/berth/workspace` |
 
 Each is tagged `git-<sha>` and `<branch>-<sha>`; `latest` is added only from the
 default branch. Override with `REGISTRY=...` / `REPO_NAME=...`.
@@ -118,11 +121,11 @@ default branch. Override with `REGISTRY=...` / `REPO_NAME=...`.
 
 | Field | Default | Where |
 |---|---|---|
-| Ingress host / TLS host | `claude-workstation.kieffer.me` | `k8s/dashboard.yaml` |
+| Ingress host / TLS host | `berth.kieffer.me` | `k8s/dashboard.yaml` |
 | Auth middleware | `authz-proxy-authz-reverse-proxy@kubernetescrd` | `k8s/dashboard.yaml` |
 | `WORKSPACE_STORAGE_CLASS` | `truenas-iscsi-ssd` | dashboard env |
-| `WORKSPACE_IMAGE` | `registry.kieffer.me/claude-workstation/workspace:latest` | dashboard env |
-| `REPO_NAME` | `claude-workstation` | `docker-push.sh` (must match the repo name) |
+| `WORKSPACE_IMAGE` | `registry.kieffer.me/berth/workspace:latest` | dashboard env |
+| `REPO_NAME` | `berth` | `docker-push.sh` (must match the repo name) |
 | `K8S_NAMESPACE` | `dev` | `docker-push.sh --rollout` target |
 | `DEFAULT_BRANCH` | `main` | branch that may tag `:latest` |
 | `MAX_WORKSPACES` | `4` | dashboard env |
@@ -140,7 +143,7 @@ failure (the UI will tell you, but this is faster):
 
 ```bash
 kubectl auth can-i create pods -n dev \
-  --as=system:serviceaccount:dev:claude-dashboard
+  --as=system:serviceaccount:dev:berth-dashboard
 ```
 
 ### 5. Seed the shared Claude config
@@ -184,6 +187,9 @@ error rather than an obvious misconfiguration.
   `/workspace/_home/codex` when the pod is replaced.
 - **Open Claude/terminal** — press *Terminal*, or attach through Claude Remote
   as before. Codex and Claude run alongside each other in the same checkout.
+- **Open Claude** appears once the workspace's Claude Remote session has
+  actually printed a `claude.ai/code` link in its pane — the card links straight
+  to that live session instead of just the terminal.
 - **Already running?** Storage is per repo and only one pod may hold it, so
   starting a second session for the same repo returns a conflict and the UI
   offers **Open Codex**, **Open terminal**, or **Replace**.
@@ -196,7 +202,10 @@ error rather than an obvious misconfiguration.
 ## Migrating from the single-pod version
 
 The old 20 Gi `claude-workspace-pvc` holds your existing checkouts and
-`~/.claude`. Nothing here deletes it.
+`~/.claude`. Nothing here deletes it. The commands below name the legacy
+Deployment `claude-workstation` because that predates this repo's current
+name and the dashboard/workspace split alike — it's the literal name of the
+object you're migrating away from, in `k8s/legacy-claude-pod.yaml`.
 
 1. **Seed S3 from the legacy volume first**, or new workspaces will start
    unauthenticated and need an interactive `claude login`.
@@ -228,8 +237,11 @@ The old 20 Gi `claude-workspace-pvc` holds your existing checkouts and
 3. Build and push both images; apply the RBAC and verify it.
 4. `kubectl scale deploy/claude-workstation -n dev --replicas=0` — the cutover
    point, instantly reversible, and required before the old PVC can be remounted.
-5. Apply `k8s/dashboard.yaml`. It reuses the Ingress name, host, TLS secret and
-   auth middleware, so cert-manager is a no-op and there is no DNS window.
+5. Apply `k8s/dashboard.yaml`. Its Ingress (`berth` / `berth.kieffer.me`) is a
+   new object with a different name and host than the legacy one, so
+   cert-manager issues a fresh certificate and you'll need a new DNS record —
+   point it at the ingress controller before or during this step so there's no
+   gap.
 6. Smoke-test, then soak. Only after that, delete the old Deployment, Service and
    PVC — manually, as a deliberate separate act.
 

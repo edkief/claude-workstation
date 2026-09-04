@@ -12,7 +12,7 @@ defaults:
     latest: main
 
 builds:
-  # -> registry.kieffer.me/claude-workstation/dashboard
+  # -> registry.kieffer.me/berth/dashboard
   # Control plane + UI. Slim: node, express, the k8s client, plus claude/ttyd/
   # rclone for the shared-config shell.
   - name: dashboard
@@ -22,7 +22,7 @@ builds:
       - shared/**
       - .dockerignore
 
-  # -> registry.kieffer.me/claude-workstation/workspace
+  # -> registry.kieffer.me/berth/workspace
   # The dev environment. Fat: Claude Code, byobu/ttyd, Postgres, Playwright +
   # Chromium, JDK/Gradle, Rust.
   - name: workspace
