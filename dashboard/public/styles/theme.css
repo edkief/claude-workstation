@@ -1,0 +1,119 @@
+/* Berth design foundation. Page styles should consume these tokens rather than
+   defining their own palette, typography, spacing, or control geometry. */
+
+:root {
+  color-scheme: light dark;
+  --ground: #eef2f2;
+  --surface: #ffffff;
+  --surface-sunk: #e4eaea;
+  --surface-hover: #dce4e4;
+  --ink: #0f1a1c;
+  --ink-soft: #33474a;
+  --muted: #5f7376;
+  --faint: #7a8d8f;
+  --line: #cdd8d8;
+  --line-soft: #dfe7e7;
+  --line-strong: #b4c4c4;
+  --starboard: #0e8f5e;
+  --starboard-d: #0a6e48;
+  --port: #c63c33;
+  --amber: #8a5e00;
+  --sea: #0d6f7e;
+  --tint: rgba(14, 143, 94, .1);
+  --tint-amber: rgba(169, 116, 10, .12);
+  --tint-port: rgba(198, 60, 51, .09);
+  --tint-sea: rgba(13, 111, 126, .11);
+  --shadow: 0 1px 2px rgba(15, 26, 28, .05), 0 12px 30px -18px rgba(15, 26, 28, .35);
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --rule: 1px solid var(--line);
+  --radius: 4px;
+  --radius-sm: 3px;
+  --pad: clamp(20px, 5vw, 72px);
+  --content-width: 1180px;
+
+  /* Dashboard aliases retained for small, readable component rules. */
+  --canvas: var(--ground);
+  --surface-raised: var(--surface-sunk);
+  --text: var(--ink);
+  --accent: var(--starboard);
+  --accent-bright: var(--starboard-d);
+  --accent-soft: var(--tint);
+  --on-accent: #04120c;
+  --green: var(--starboard);
+  --green-soft: var(--tint);
+  --yellow: var(--amber);
+  --yellow-soft: var(--tint-amber);
+  --red: var(--port);
+  --red-soft: var(--tint-port);
+  --sea-soft: var(--tint-sea);
+  --font: var(--body);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0b1315;
+    --surface: #101b1d;
+    --surface-sunk: #0a1214;
+    --surface-hover: #17272a;
+    --ink: #e8f0ef;
+    --ink-soft: #c0d0cf;
+    --muted: #8aa0a0;
+    --faint: #6e8788;
+    --line: #223336;
+    --line-soft: #1a292b;
+    --line-strong: #33494d;
+    --starboard: #35d394;
+    --starboard-d: #7ce9bc;
+    --port: #ff7466;
+    --amber: #f0b429;
+    --sea: #5cc8db;
+    --tint: rgba(53, 211, 148, .1);
+    --tint-amber: rgba(240, 180, 41, .1);
+    --tint-port: rgba(255, 116, 102, .1);
+    --tint-sea: rgba(92, 200, 219, .12);
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 18px 40px -22px rgba(0, 0, 0, .8);
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground: #0b1315;
+  --surface: #101b1d;
+  --surface-sunk: #0a1214;
+  --surface-hover: #17272a;
+  --ink: #e8f0ef;
+  --ink-soft: #c0d0cf;
+  --muted: #8aa0a0;
+  --faint: #6e8788;
+  --line: #223336;
+  --line-soft: #1a292b;
+  --line-strong: #33494d;
+  --starboard: #35d394;
+  --starboard-d: #7ce9bc;
+  --port: #ff7466;
+  --amber: #f0b429;
+  --sea: #5cc8db;
+  --tint: rgba(53, 211, 148, .1);
+  --tint-amber: rgba(240, 180, 41, .1);
+  --tint-port: rgba(255, 116, 102, .1);
+  --tint-sea: rgba(92, 200, 219, .12);
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 18px 40px -22px rgba(0, 0, 0, .8);
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { min-width: 320px; margin: 0; color: var(--ink); background: var(--ground); font-family: var(--body); -webkit-font-smoothing: antialiased; }
+button, input, select { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .55; }
+a { color: inherit; }
+img { max-width: 100%; }
+[hidden] { display: none !important; }
+:focus-visible { outline: 2px solid var(--starboard); outline-offset: 3px; border-radius: 2px; }
+.mono { font-family: var(--mono); font-variant-ligatures: none; }
+.eyebrow, .label { margin: 0; color: var(--muted); font: 400 11px var(--mono); letter-spacing: .16em; text-transform: uppercase; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

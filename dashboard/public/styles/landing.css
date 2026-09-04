@@ -1,37 +1,8 @@
-/* Berth landing page — design tokens and layout.
-   The dashboard shell (styles/app.css) mirrors this palette; keep the two in
-   step when a colour changes. */
+/* Berth marketing page layout. Shared foundations live in theme.css. */
 
-html { -webkit-text-size-adjust: 100%; color-scheme: light dark; }
+body { padding: 0; font-size: 16px; line-height: 1.6; }
 
-body { margin: 0; padding: 0; min-width: 320px; }
-
-img { max-width: 100%; }
-
-[hidden] { display: none !important; }
-
-
-:root { --ground: #EEF2F2; --surface: #FFFFFF; --surface-sunk: #E4EAEA; --ink: #0F1A1C; --ink-soft: #33474A; --muted: #5F7376; --line: #CDD8D8; --line-soft: #DFE7E7; --starboard: #0E8F5E; --starboard-d: #0A6E48; --port: #C63C33; --amber: #8A5E00; --tint: rgba(14,143,94,.08); --tint-amber: rgba(169,116,10,.10); --tint-port: rgba(198,60,51,.09); --shadow: 0 1px 2px rgba(15,26,28,.05), 0 12px 30px -18px rgba(15,26,28,.35); --display: "Archivo", "Helvetica Neue", Arial, sans-serif; --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace; --rule: 1px solid var(--line); --pad: clamp(20px, 5vw, 72px); }
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --ground: #0B1315; --surface: #101B1D; --surface-sunk: #0A1214; --ink: #E8F0EF; --ink-soft: #C0D0CF; --muted: #8AA0A0; --line: #223336; --line-soft: #1A292B; --starboard: #35D394; --starboard-d: #7CE9BC; --port: #FF7466; --amber: #F0B429; --tint: rgba(53,211,148,.10); --tint-amber: rgba(240,180,41,.10); --tint-port: rgba(255,116,102,.10); --shadow: 0 1px 2px rgba(0,0,0,.4), 0 18px 40px -22px rgba(0,0,0,.8); }
-}
-
-:root[data-theme="dark"] { --ground: #0B1315; --surface: #101B1D; --surface-sunk: #0A1214; --ink: #E8F0EF; --ink-soft: #C0D0CF; --muted: #8AA0A0; --line: #223336; --line-soft: #1A292B; --starboard: #35D394; --starboard-d: #7CE9BC; --port: #FF7466; --amber: #F0B429; --tint: rgba(53,211,148,.10); --tint-amber: rgba(240,180,41,.10); --tint-port: rgba(255,116,102,.10); --shadow: 0 1px 2px rgba(0,0,0,.4), 0 18px 40px -22px rgba(0,0,0,.8); }
-
-* { box-sizing: border-box; }
-
-body { background: var(--ground); color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
-
-.wrap { max-width: 1180px; margin: 0px auto; padding: 0 var(--pad); }
-
-a { color: inherit; }
-
-:focus-visible { outline: 2px solid var(--starboard); outline-offset: 3px; border-radius: 2px; }
-
-.mono { font-family: var(--mono); font-variant-ligatures: none; }
-
-.eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
+.wrap { max-width: var(--content-width); margin: 0 auto; padding: 0 var(--pad); }
 
 .rail { border-bottom: var(--rule); background: var(--surface); position: sticky; top: 0px; z-index: 10; }
 
