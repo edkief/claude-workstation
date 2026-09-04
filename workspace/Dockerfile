@@ -107,9 +107,17 @@ RUN . "$NVM_DIR/nvm.sh" \
     && npm install -g playwright @playwright/mcp
 USER root
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+# Browsers are installed through *each* package's own playwright-core, because
+# `playwright` and `@playwright/mcp` pin different revisions and each will only
+# launch the one it pinned. Running just the `playwright` CLI here left the MCP
+# server with chromium-1234 when its bundled core wanted 1243, so every
+# browser_navigate failed with "Executable doesn't exist" long after the server
+# itself had started fine. --with-deps once (as root) covers the OS packages for
+# both; the second install only fetches the browser.
 RUN . "$NVM_DIR/nvm.sh" \
     && apt-get update \
     && playwright install --with-deps chromium \
+    && node "$(npm root -g)/@playwright/mcp/node_modules/playwright-core/cli.js" install chromium \
     && rm -rf /var/lib/apt/lists/*
 
 USER ubuntu
