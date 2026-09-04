@@ -402,6 +402,9 @@ app.get('/api/disk', asyncRoute(async (req, res) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api', (req, res) => res.status(404).json({ error: 'not_found' }));
+// The landing page is a named route, not `/`: the dashboard is what people open
+// every day, and putting a marketing page in front of it costs a click a visit.
+app.get('/welcome', (req, res) => res.sendFile(path.join(__dirname, 'public', 'landing.html')));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 app.use((err, req, res, next) => {          // eslint-disable-line no-unused-vars

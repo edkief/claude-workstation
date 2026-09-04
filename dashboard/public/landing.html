@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0B1315">
+  <title>Berth — warm, per-repo coding workspaces</title>
+  <meta name="description" content="Berth gives each repository a standing place in the cluster: a pod that comes and goes, a volume that doesn't.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/styles/landing.css">
+</head>
+<body>
+<header class="rail">
+  <div class="wrap">
+    <a class="mark" href="#top"><span class="cleat"></span>Berth</a>
+    <nav>
+      <a class="opt" href="#board">Board</a>
+      <a class="opt" href="#pod">The pod</a>
+      <a href="#probes">Health</a>
+      <a href="#storage">Storage</a>
+    </nav>
+    <a class="ns" href="/">Open the dashboard →</a>
+  </div>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <div class="wrap">
+      <div>
+        <p class="eyebrow">Kubernetes · one pod per repo</p>
+        <h1>Every repo keeps its <em>mooring</em>.</h1>
+        <p class="lede">
+          Berth gives each repository a standing place in the cluster: a pod that comes and
+          goes, a volume that doesn't. Pick a branch, get a browser terminal with Claude Code
+          or Codex already attached — and find your checkout, your <span class="mono">node_modules</span>
+          and your uncommitted work exactly where you left them.
+        </p>
+        <div class="cta">
+          <a class="btn btn-primary" href="/">Open the board</a>
+          <a class="btn btn-ghost" href="#pod">What's on a pod</a>
+        </div>
+        <div class="undercut">
+          <span><b>Cold start</b> 60–180 s</span>
+          <span><b>Warm start</b> volume already attached</span>
+          <span><b>Terminate</b> keeps the volume</span>
+        </div>
+      </div>
+
+      <div class="board" id="board">
+        <div class="board-head">
+          <h2>Berth board</h2>
+          <span>example occupancy · <a href="/">see the live board</a></span>
+        </div>
+
+        <div class="berth">
+          <div class="berth-no">B1</div>
+          <div>
+            <div class="berth-repo">edkief/berth</div>
+            <div class="berth-branch">main · <b>4.2 GiB used</b> · up 3 h 12 m</div>
+          </div>
+          <span class="pill p-attached">attached</span>
+        </div>
+
+        <div class="berth">
+          <div class="berth-no">B2</div>
+          <div>
+            <div class="berth-repo">edkief/k8s-home</div>
+            <div class="berth-branch">feat/tekton-cache · <b>1.8 GiB used</b> · up 41 m</div>
+          </div>
+          <span class="pill p-attached">attached</span>
+        </div>
+
+        <div class="berth">
+          <div class="berth-no">B3</div>
+          <div>
+            <div class="berth-repo">edkief/atlas-sim</div>
+            <div class="berth-branch">main · cloning repository…</div>
+          </div>
+          <span class="pill p-mooring">mooring</span>
+        </div>
+
+        <div class="berth">
+          <div class="berth-no">B4</div>
+          <div>
+            <div class="berth-repo" style="color: var(--muted)">— open —</div>
+            <div class="berth-branch">volume for edkief/wave-lab held warm · 9 d idle</div>
+          </div>
+          <span class="pill p-free">free</span>
+        </div>
+
+        <div class="board-foot">
+          <span>MAX_WORKSPACES=4 · a fifth request answers 429</span>
+          <span>idle volumes pruned at 30 d</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="pod">
+    <div class="wrap">
+      <p class="eyebrow">The pod</p>
+      <h2 class="head">Four things listen. Nothing else is shared.</h2>
+      <p class="sub">
+        A workspace is a bare pod with <span class="mono">restartPolicy: Always</span> — not a Deployment.
+        An out-of-memory agent restarts its own container, keeps its pod IP and its attached volume,
+        and takes nothing else down with it.
+      </p>
+
+      <div class="deck">
+        <div>
+          <div class="port mono">:7681</div>
+          <h3>Web terminal</h3>
+          <p>ttyd into byobu, with <span class="mono">claude remote</span> already running in the pane. Proxied through one host, one certificate.</p>
+        </div>
+        <div>
+          <div class="port mono">:7682</div>
+          <h3>In-pod agent</h3>
+          <p>Health, disk and auth, answered from inside. It exists so the control plane never needs <span class="mono">pods/exec</span> — a root shell into every workspace.</p>
+        </div>
+        <div>
+          <div class="port mono">:7684</div>
+          <h3>Codex client</h3>
+          <p>An authenticated per-workspace web client over <span class="mono">codex app-server</span>, for when the agent you want isn't Claude.</p>
+        </div>
+        <div>
+          <div class="port mono">:5432</div>
+          <h3>Scratch Postgres</h3>
+          <p>Empty on every pod start — <span class="mono">PGDATA</span> lives on the container layer. Anything worth keeping belongs in the repo.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band sunk">
+    <div class="wrap">
+      <p class="eyebrow">Coming alongside</p>
+      <h2 class="head">Three stages, and the board narrates all of them.</h2>
+      <p class="sub">
+        A cold start pulls a multi-gigabyte image and clones a repository — far past any browser
+        timeout. So the request returns immediately and the bootstrap reports itself as text,
+        rather than a spinner that means nothing.
+      </p>
+
+      <div class="stages">
+        <div class="stage">
+          <div class="stage-no">STAGE 01</div>
+          <h3>Assign</h3>
+          <p>Pick a repo and a branch. Berth derives a deterministic pod name, reuses the repo's volume if it has one, and answers <span class="mono">202</span> before the pod is anywhere near ready.</p>
+          <span class="t">already occupied → 409, with attach or replace</span>
+        </div>
+        <div class="stage">
+          <div class="stage-no">STAGE 02</div>
+          <h3>Moor</h3>
+          <p>Secrets, shared Claude config, clone into <span class="mono">/workspace/&lt;branch&gt;</span>, then supervisord. Each phase names itself on the card: <em>syncing config…</em>, <em>cloning repository…</em></p>
+          <span class="t">readiness stays false for the whole bootstrap</span>
+        </div>
+        <div class="stage">
+          <div class="stage-no">STAGE 03</div>
+          <h3>Attach</h3>
+          <p>The terminal opens at its own URL. Close the tab, come back tomorrow, reattach — the tmux session, the checkout and the branch are all still there.</p>
+          <span class="t">terminals are per-session URLs, never a global one</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="probes">
+    <div class="wrap">
+      <p class="eyebrow">Health</p>
+      <h2 class="head">Two probes, asking two different questions.</h2>
+      <p class="sub">
+        A workspace pod backs no Service, so a readiness failure is forever — one sat at 503 for
+        eight hours without restarting. Liveness is the only lever that moves anything, which is
+        exactly why it must never mean "the process is alive".
+      </p>
+
+      <div class="probes">
+        <table>
+          <thead>
+            <tr><th scope="col">Probe</th><th scope="col">Fails when</th><th scope="col">Consequence</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="k green">/healthz</td>
+              <td>Bootstrap unfinished, or the named agent session is gone<span class="note">Matched on the session name in <span class="mono">/proc</span> — never on a scrolling terminal pane</span></td>
+              <td>The board shows the stage. <b>Nothing restarts.</b></td>
+            </tr>
+            <tr>
+              <td class="k red">/livez</td>
+              <td>The pod was ready once, the agent is gone, and three in-pane relaunches have been spent<span class="note">Never fails during bootstrap, so a slow clone is never shot</span></td>
+              <td>The kubelet restarts the container, and the bootstrap re-proves itself.</td>
+            </tr>
+            <tr>
+              <td class="k">auth-failed</td>
+              <td>A login line in the pane, or credentials missing after 30 s<span class="note">The one failure retyping a command cannot fix</span></td>
+              <td>The ladder stops. The pod stays up carrying its message instead of crash-looping — and the terminal stays reachable, because that is where <span class="mono">/login</span> gets typed.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="band sunk" id="storage">
+    <div class="wrap">
+      <div class="split">
+        <div>
+          <p class="eyebrow">Storage</p>
+          <h2 class="head">One volume per repo. Every branch lives on it.</h2>
+          <ul class="bullets">
+            <li>Ending a session deletes the pod and keeps the volume, so the next one on that repo starts warm.</li>
+            <li>Branch checkouts sit side by side — switching branches costs a directory, not a clone.</li>
+            <li><span class="mono">~/.claude</span> is a subpath of the same volume, so credentials and history survive a restart.</li>
+            <li>Volumes are reclaimed only by the 30-day pruner, or by an explicit delete that refuses while a pod holds them.</li>
+          </ul>
+        </div>
+        <pre class="tree">/workspace/                <i># the repo's volume</i>
+  <b>_home/claude/</b>            <i># mounted at ~/.claude</i>
+  <b>_home/claude.json</b>        <i># ~/.claude.json links here</i>
+  main/                    <i># checkout</i>
+  feat/tekton-cache/       <i># checkout</i>
+  <i>node_modules, build caches, and</i>
+  <i>whatever you had not committed</i></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <p class="eyebrow">Images</p>
+      <h2 class="head">Built by the cluster, pinnable by digest.</h2>
+      <p class="sub">
+        Every build tags <span class="mono">git-&lt;sha&gt;</span> and <span class="mono">&lt;branch&gt;-&lt;sha&gt;</span>;
+        <span class="mono">:latest</span> only from <span class="mono">main</span>. The pre-rebrand path is published
+        from the same build, so nothing pinning it has to move today.
+      </p>
+      <div class="images">
+        <div class="imgrow">
+          <span>registry.kieffer.me/berth/<span class="tag">dashboard</span></span>
+          <span class="alias">also pushed as claude-workstation/dashboard</span>
+        </div>
+        <div class="imgrow">
+          <span>registry.kieffer.me/berth/<span class="tag">workspace</span></span>
+          <span class="alias">also pushed as claude-workstation/workspace</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span class="mark"><span class="cleat"></span>Berth</span>
+    <p>Warm, per-repo coding workspaces you attach to from a browser.</p>
+    <span class="right">formerly claude-workstation</span>
+  </div>
+</footer>
+</body>
+</html>

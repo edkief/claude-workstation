@@ -3,16 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#10151f">
-  <title>Claude Workstation</title>
+  <meta name="theme-color" content="#0b1315">
+  <title>Berth</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="/styles/app.css">
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to workspaces</a>
   <header class="app-header"><div class="app-header__inner">
-    <a class="brand" href="/" aria-label="Claude Workstation home"><span class="brand__mark" aria-hidden="true">C</span><span>Claude Workstation</span><span class="environment-chip" id="pod-name" hidden></span></a>
+    <a class="brand" href="/" aria-label="Berth home"><span class="brand__mark" aria-hidden="true"></span><span>Berth</span><span class="environment-chip" id="pod-name" hidden></span></a>
     <div class="header-metrics" aria-label="Cluster resource use"><div class="meter meter--compact"><span>CPU</span><strong id="overall-cpu">—</strong><i><b id="overall-cpu-bar"></b></i></div><div class="meter meter--compact"><span>Mem</span><strong id="overall-mem">—</strong><i><b id="overall-mem-bar"></b></i></div></div>
-    <nav class="header-nav" aria-label="Utility navigation"><a class="button button--quiet" href="/config-tty/" target="_blank" rel="noopener">Config shell</a><a class="button button--quiet" href="https://claude.ai/code" target="_blank" rel="noopener" aria-label="Open Claude Code">Claude ↗</a></nav>
+    <nav class="header-nav" aria-label="Utility navigation"><a class="button button--quiet" href="/welcome">About</a><a class="button button--quiet" href="/config-tty/" target="_blank" rel="noopener">Config shell</a><a class="button button--quiet" href="https://claude.ai/code" target="_blank" rel="noopener" aria-label="Open Claude Code">Claude ↗</a></nav>
   </div></header>
   <main class="app-shell" id="main-content">
     <section class="alert" id="token-banner" hidden aria-live="polite"><div><strong>Claude login needs attention</strong><p id="token-banner-text"></p></div><div class="alert__actions"><a class="button button--secondary button--small" href="/config-tty/" target="_blank" rel="noopener">Config shell</a><button class="button button--secondary button--small" id="token-refresh-btn">Refresh now</button><button class="button button--quiet button--small" id="token-recheck-btn">Re-check</button></div></section>
