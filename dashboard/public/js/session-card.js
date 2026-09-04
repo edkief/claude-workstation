@@ -27,7 +27,7 @@ export function createSessionCard(session, { onTerminate, onOpenTerminal, onOpen
         <p class="session-message" data-role="message"></p>
       </div>
       <div class="session-side">
-        <div class="session-meters">${meter('CPU', 'cpu')}${meter('Memory', 'memory')}</div>
+        <div class="session-meters">${meter('CPU', 'cpu')}${meter('Mem', 'memory')}</div>
         <div class="session-actions">
           <button class="button button--primary button--small" data-action="claude">Open Claude</button>
           <button class="button button--primary button--small" data-action="codex">Open Codex</button>
